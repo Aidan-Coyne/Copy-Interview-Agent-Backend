@@ -1,0 +1,17 @@
+# Ignore Python virtual environments
+spacy_env_310/
+venv/
+
+# Ignore system-specific files
+__pycache__/
+*.pyc
+
+# Ignore uploaded/generated user files
+uploaded_cvs/
+british_audio_questions/
+user_responses/
+
+# IDE and OS specific
+.vscode/
+.DS_Store
+Thumbs.db
