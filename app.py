@@ -10,6 +10,7 @@ import logging
 import json
 import os
 import shutil
+import tempfile  # <-- Added for GCP credential patch
 from typing import Dict
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,6 +28,13 @@ print("CORS Middleware configured.")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ✅ Google credentials patch for Railway
+google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if google_creds and google_creds.strip().startswith('{'):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
+        temp_file.write(google_creds.encode())
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file.name
 
 UPLOAD_FOLDER = "uploaded_cvs"
 AUDIO_FOLDER = "british_audio_questions"
