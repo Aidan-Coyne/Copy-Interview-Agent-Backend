@@ -7,6 +7,7 @@ from google.cloud import texttospeech
 from job_role_library import job_role_library
 from sector_library import sector_library
 from keyword_extraction import extract_keywords
+from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 nlp = spacy.load("en_core_web_sm")
@@ -18,7 +19,13 @@ generic_skill_phrases = [
     "your learning agility"
 ]
 
-def generate_questions(cv_text, company_info, job_role, company_name, selected_question_type="mixed", output_dir="british_audio_questions"):
+def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket) -> str:
+    blob = firebase_bucket.blob(f"questions/{filename}")
+    blob.upload_from_file(BytesIO(audio_bytes), content_type="audio/mpeg")
+    blob.make_public()  # Optional, for direct frontend access
+    return blob.public_url
+
+def generate_questions(cv_text, company_info, job_role, company_name, selected_question_type="mixed", firebase_bucket=None):
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
     relevant_skills = extract_relevant_skills_from_role(job_role)
@@ -29,7 +36,6 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
         relevant_skills = random.sample(generic_skill_phrases, 2)
     relevant_experience = relevant_experience or "your field"
 
-    # Generate CV Insight Questions
     cv_keywords = extract_keywords(cv_text, top_n=10)
     selected_cv_keywords = random.sample(cv_keywords, min(3, len(cv_keywords)))
     cv_insight_questions = []
@@ -109,8 +115,6 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
     question_pool = [q for q in question_pool if q and isinstance(q, tuple) and len(q) == 2]
     selected_questions = random.sample(question_pool, 8) if len(question_pool) > 8 else question_pool
 
-    os.makedirs(output_dir, exist_ok=True)
-
     client = texttospeech.TextToSpeechClient()
     voice_params = texttospeech.VoiceSelectionParams(
         language_code="en-GB",
@@ -121,17 +125,17 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
 
     question_data = []
     for i, (q_type, question) in enumerate(selected_questions):
-        audio_file = os.path.join(output_dir, f"question_{i + 1}.mp3")
         try:
             ssml_text = f"<speak><prosody rate='1' pitch='-10%'>{question}</prosody></speak>"
             synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
             response = client.synthesize_speech(input=synthesis_input, voice=voice_params, audio_config=audio_config)
-            with open(audio_file, "wb") as out:
-                out.write(response.audio_content)
+
+            filename = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i + 1}.mp3"
+            firebase_url = upload_audio_to_firebase(response.audio_content, filename, firebase_bucket)
 
             question_data.append({
                 "question_text": question,
-                "audio_file": audio_file,
+                "audio_file": firebase_url,
                 "skills": relevant_skills,
                 "experience": relevant_experience,
                 "question_type": q_type
