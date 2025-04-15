@@ -20,10 +20,12 @@ from firebase_admin import credentials, storage
 
 app = FastAPI()
 
-# Enable CORS for frontend access
+# ✅ Updated CORS: Allow only your deployed frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://ai-interview-agent-frontend-production.up.railway.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
