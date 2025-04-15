@@ -1,9 +1,11 @@
 import spacy
 import random
 import os
+import json
 import logging
 from fuzzywuzzy import fuzz
 from google.cloud import texttospeech
+from google.oauth2 import service_account
 from job_role_library import job_role_library
 from sector_library import sector_library
 from keyword_extraction import extract_keywords
@@ -18,6 +20,20 @@ generic_skill_phrases = [
     "your innovative thinking", "your collaborative skills", "your attention to detail",
     "your learning agility"
 ]
+
+def get_text_to_speech_client():
+    try:
+        google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        if not google_creds_json:
+            raise ValueError("GOOGLE_APPLICATION_CREDENTIALS_JSON not found.")
+
+        creds_dict = json.loads(google_creds_json)
+        credentials = service_account.Credentials.from_service_account_info(creds_dict)
+        client = texttospeech.TextToSpeechClient(credentials=credentials)
+        return client
+    except Exception as e:
+        logging.error(f"Failed to initialize TTS client: {e}")
+        raise
 
 def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket) -> str:
     blob = firebase_bucket.blob(f"questions/{filename}")
@@ -115,7 +131,7 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
     question_pool = [q for q in question_pool if q and isinstance(q, tuple) and len(q) == 2]
     selected_questions = random.sample(question_pool, 8) if len(question_pool) > 8 else question_pool
 
-    client = texttospeech.TextToSpeechClient()
+    client = get_text_to_speech_client()
     voice_params = texttospeech.VoiceSelectionParams(
         language_code="en-GB",
         name="en-GB-Wavenet-B",
