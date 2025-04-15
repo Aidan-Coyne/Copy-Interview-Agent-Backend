@@ -9,7 +9,6 @@ import uvicorn
 import logging
 import json
 import os
-import shutil
 import tempfile
 from typing import Dict
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,14 +49,17 @@ if google_creds_json:
         })
         bucket = storage.bucket()
 
-# Upload folders
-UPLOAD_FOLDER = "uploaded_cvs"
-USER_RESPONSES_FOLDER = "user_responses"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(USER_RESPONSES_FOLDER, exist_ok=True)
-app.mount("/user_responses", StaticFiles(directory=USER_RESPONSES_FOLDER), name="user_responses")
-
+# Store session data
 session_data: Dict[str, Dict] = {}
+
+# ✅ Firebase upload helper for CV
+
+def upload_cv_to_firebase(file: UploadFile, firebase_bucket) -> str:
+    blob = firebase_bucket.blob(f"cvs/{file.filename}")
+    file.file.seek(0)
+    blob.upload_from_file(file.file, content_type=file.content_type)
+    blob.make_public()
+    return blob.public_url
 
 @app.get("/")
 def home():
@@ -76,9 +78,9 @@ async def upload_cv(
         if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".doc") or filename_lower.endswith(".docx")):
             raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # ✅ Upload CV to Firebase
+        cv_public_url = upload_cv_to_firebase(file, bucket)
+        logger.info(f"Uploaded CV to Firebase: {cv_public_url}")
 
         cv_text = process_cv.extract_text_from_file(file)
         if not cv_text.strip():
@@ -106,7 +108,8 @@ async def upload_cv(
             "session_id": session_id,
             "cv_text": cv_text,
             "company_info": company_info_json,
-            "questions_data": questions_data
+            "questions_data": questions_data,
+            "cv_url": cv_public_url
         }
 
     except HTTPException as http_exception:
