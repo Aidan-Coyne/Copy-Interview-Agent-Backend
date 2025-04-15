@@ -20,12 +20,10 @@ from firebase_admin import credentials, storage
 
 app = FastAPI()
 
-# ✅ Updated CORS: Allow only your deployed frontend
+# ✅ CORS: Allow only your frontend origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://ai-interview-agent-frontend-production.up.railway.app"
-    ],
+    allow_origins=["https://ai-interview-agent-frontend-production.up.railway.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,24 +33,28 @@ print("CORS Middleware configured.")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Firebase credentials patch for Railway
+# ✅ Firebase credentials from Railway environment
 google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+bucket = None
+
 if google_creds_json:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
         temp_file.write(google_creds_json.encode())
         temp_path = temp_file.name
     cred = credentials.Certificate(temp_path)
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': 'ai-interview-agent-e2f7b.appspot.com'
-    })
-    bucket = storage.bucket()
 
+    # ✅ Initialize only if not already initialized
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': 'ai-interview-agent-e2f7b.appspot.com'
+        })
+        bucket = storage.bucket()
+
+# Upload folders
 UPLOAD_FOLDER = "uploaded_cvs"
 USER_RESPONSES_FOLDER = "user_responses"
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(USER_RESPONSES_FOLDER, exist_ok=True)
-
 app.mount("/user_responses", StaticFiles(directory=USER_RESPONSES_FOLDER), name="user_responses")
 
 session_data: Dict[str, Dict] = {}
@@ -71,47 +73,25 @@ async def upload_cv(
     logger.info(f"Received upload_cv request for company: {company_name}, role: {job_role}, file: {file.filename}")
     try:
         filename_lower = file.filename.lower()
-
         if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".doc") or filename_lower.endswith(".docx")):
-            logger.error(f"Unsupported file type: {file.filename}")
             raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        logger.debug(f"File saved to {file_path}")
-
-        try:
-            cv_text = process_cv.extract_text_from_file(file)
-            logger.debug(f"Extracted CV text length: {len(cv_text)}")
-        except Exception as e:
-            logger.exception("Error extracting text from CV.")
-            raise HTTPException(status_code=500, detail=f"Error extracting CV text: {str(e)}")
-
+        cv_text = process_cv.extract_text_from_file(file)
         if not cv_text.strip():
-            logger.error("CV text extraction failed or is empty.")
             raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
 
-        try:
-            company_info = search_company.search_company_info(company_name, job_role)
-            logger.debug(f"Raw company_info from Brave API: {company_info}")
-            company_info_json = json.loads(company_info)
-        except Exception as e:
-            logger.exception("Error fetching or parsing company info.")
-            raise HTTPException(status_code=500, detail=f"Error fetching company info: {str(e)}")
+        company_info = search_company.search_company_info(company_name, job_role)
+        company_info_json = json.loads(company_info)
 
-        logger.info(f"Company Info Retrieved: {company_info_json}")
-        logger.info(f"Generating {question_type} questions for {company_name} - {job_role}")
-
-        try:
-            questions_data = question_generation.generate_questions(
-                cv_text, company_info_json, job_role, company_name, selected_question_type=question_type, firebase_bucket=bucket
-            )
-            logger.debug(f"Questions Data Generated: {questions_data}")
-        except Exception as e:
-            logger.exception("Error in question_generation.generate_questions.")
-            raise HTTPException(status_code=500, detail=f"Error generating interview questions: {str(e)}")
+        questions_data = question_generation.generate_questions(
+            cv_text, company_info_json, job_role, company_name,
+            selected_question_type=question_type,
+            firebase_bucket=bucket
+        )
 
         session_id = f"{company_name}_{job_role}_{file.filename}"
         session_data[session_id] = {
@@ -143,8 +123,6 @@ async def evaluate_audio_response(
     session_id: str = Form(...)
 ):
     try:
-        logger.info(f"Received evaluation request for session_id: {session_id}, question_index: {question_index}")
-
         if session_id not in session_data:
             raise HTTPException(status_code=400, detail="Session not found. Please generate questions first.")
 
@@ -155,51 +133,28 @@ async def evaluate_audio_response(
             raise HTTPException(status_code=400, detail="Invalid question index.")
 
         question_data = questions[question_index]
-        logger.info(f"Processing question {question_index}: {question_data}")
-
         audio_data = await audio_file.read()
-        logger.info(f"Received audio file of length: {len(audio_data)} bytes")
 
-        try:
-            wav_data = evaluate_response.convert_to_wav(audio_data)
-        except Exception as conv_err:
-            logger.error(f"Error converting audio to WAV: {conv_err}")
-            raise HTTPException(status_code=400, detail=f"Audio conversion failed: {conv_err}")
+        wav_data = evaluate_response.convert_to_wav(audio_data)
+        response_text = evaluate_response.transcribe_audio(wav_data)
 
-        try:
-            response_text = evaluate_response.transcribe_audio(wav_data)
-        except evaluate_response.TranscriptionError as e:
-            logger.error(f"Transcription error: {e}")
-            raise HTTPException(status_code=400, detail=f"Audio transcription failed: {e}")
+        relevant_keywords, question_type, company_sector = evaluate_response.get_relevant_keywords(
+            question_data, session["job_role"], session["company_name"], json.dumps(session["company_info"])
+        )
 
-        logger.info(f"Transcribed Response: {response_text}")
+        result = evaluate_response.score_response(
+            response_text, question_data["question_text"], relevant_keywords, question_type, company_sector
+        )
 
-        try:
-            relevant_keywords, question_type, company_sector = evaluate_response.get_relevant_keywords(
-                question_data, session["job_role"], session["company_name"], json.dumps(session["company_info"])
-            )
-            logger.info(f"Relevant Keywords: {relevant_keywords}, Question Type: {question_type}, Sector: {company_sector}")
-        except Exception as e:
-            logger.exception("Error getting relevant keywords.")
-            raise HTTPException(status_code=500, detail=f"Error determining relevant keywords: {str(e)}")
-
-        try:
-            result = evaluate_response.score_response(
-                response_text, question_data["question_text"], relevant_keywords, question_type, company_sector
-            )
-        except Exception as e:
-            logger.exception("Error scoring response.")
-            raise HTTPException(status_code=500, detail=f"Error scoring response: {str(e)}")
-
-        logger.info(f"Evaluation Result: {result}")
         return JSONResponse(content={"feedback": result})
 
+    except evaluate_response.TranscriptionError as e:
+        raise HTTPException(status_code=400, detail=f"Audio transcription failed: {e}")
     except HTTPException as http_exception:
-        logger.error(f"HTTP Exception: {http_exception.detail}")
         raise http_exception
     except Exception as e:
         logger.exception("Unexpected error in evaluate_response endpoint.")
-        raise HTTPException(status_code=500, detail=f"An error occurred while evaluating the response.")
+        raise HTTPException(status_code=500, detail="An error occurred while evaluating the response.")
 
 @app.post("/end_session/{session_id}")
 def end_session(session_id: str):
