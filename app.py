@@ -19,7 +19,7 @@ from firebase_admin import credentials, storage
 
 app = FastAPI()
 
-# ✅ CORS: Allow only your frontend origin
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://ai-interview-agent-frontend-production.up.railway.app"],
@@ -32,29 +32,35 @@ print("CORS Middleware configured.")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Firebase credentials from Railway environment
-google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+# ✅ Firebase setup with error handling
 bucket = None
-
+google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if google_creds_json:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
-        temp_file.write(google_creds_json.encode())
-        temp_path = temp_file.name
-    cred = credentials.Certificate(temp_path)
-
-    # ✅ Initialize only if not already initialized
-    if not firebase_admin._apps:
-        firebase_admin.initialize_app(cred, {
-            'storageBucket': 'ai-interview-agent-e2f7b.appspot.com'
-        })
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
+            temp_file.write(google_creds_json.encode())
+            temp_path = temp_file.name
+        cred = credentials.Certificate(temp_path)
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred, {
+                'storageBucket': 'ai-interview-agent-e2f7b.appspot.com'
+            })
+            logger.info("✅ Firebase initialized.")
         bucket = storage.bucket()
+        if not bucket:
+            logger.error("❌ Firebase bucket returned None.")
+    except Exception as e:
+        logger.error(f"❌ Firebase initialization failed: {e}")
+else:
+    logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
 
 # Store session data
 session_data: Dict[str, Dict] = {}
 
-# ✅ Firebase upload helper for CV
-
+# ✅ Firebase upload helper
 def upload_cv_to_firebase(file: UploadFile, firebase_bucket) -> str:
+    if not firebase_bucket:
+        raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
     blob = firebase_bucket.blob(f"cvs/{file.filename}")
     file.file.seek(0)
     blob.upload_from_file(file.file, content_type=file.content_type)
@@ -74,13 +80,12 @@ async def upload_cv(
 ):
     logger.info(f"Received upload_cv request for company: {company_name}, role: {job_role}, file: {file.filename}")
     try:
-        filename_lower = file.filename.lower()
-        if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".doc") or filename_lower.endswith(".docx")):
+        if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
             raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
         # ✅ Upload CV to Firebase
         cv_public_url = upload_cv_to_firebase(file, bucket)
-        logger.info(f"Uploaded CV to Firebase: {cv_public_url}")
+        logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
         cv_text = process_cv.extract_text_from_file(file)
         if not cv_text.strip():
