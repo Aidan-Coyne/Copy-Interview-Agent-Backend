@@ -59,7 +59,7 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
         ("technical", f"Based on your CV, tell me about your experience with {relevant_skills[0]}."),
         ("technical", f"Can you describe a project where you demonstrated {relevant_skills[1]} skills?"),
         ("technical", f"Tell me about your most relevant experience in {relevant_experience}."),
-        ("technical", f"How do your skills align with {company_name}'s work in {company_sectors}?") if company_sectors else None,
+        ("technical", f"How do your skills align with {company_name}'s work in {company_sectors}.") if company_sectors else None,
         ("technical", f"Can you describe a technical challenge relevant to the {company_sectors} sector and how you overcame it?") if company_sectors else None,
         ("technical", f"What are the most important technical trends shaping the {company_sectors} industry right now?") if company_sectors else None,
         ("technical", "Describe a situation where you had to overcome a challenging technical problem."),
@@ -130,8 +130,13 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
             synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
             response = client.synthesize_speech(input=synthesis_input, voice=voice_params, audio_config=audio_config)
 
+            if not response.audio_content:
+                logging.error(f"No audio content returned for question {i + 1}: {question}")
+                continue
+
             filename = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i + 1}.mp3"
             firebase_url = upload_audio_to_firebase(response.audio_content, filename, firebase_bucket)
+            logging.info(f"Uploaded question {i + 1} to Firebase: {firebase_url}")
 
             question_data.append({
                 "question_text": question,
