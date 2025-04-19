@@ -57,13 +57,13 @@ else:
 # Store session data
 session_data: Dict[str, Dict] = {}
 
-# ✅ Firebase upload helper
+# ✅ Firebase upload helper with pointer fix
 def upload_cv_to_firebase(file: UploadFile, firebase_bucket) -> str:
     if not firebase_bucket:
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
+    file_contents = file.file.read()  # Read file into memory
     blob = firebase_bucket.blob(f"cvs/{file.filename}")
-    file.file.seek(0)
-    blob.upload_from_file(file.file, content_type=file.content_type)
+    blob.upload_from_string(file_contents, content_type=file.content_type)
     blob.make_public()
     return blob.public_url
 
@@ -87,6 +87,7 @@ async def upload_cv(
         cv_public_url = upload_cv_to_firebase(file, bucket)
         logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
+        file.file.seek(0)  # Reset pointer for text extraction
         cv_text = process_cv.extract_text_from_file(file)
         if not cv_text.strip():
             raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
