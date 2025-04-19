@@ -68,8 +68,10 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
     if isinstance(file_or_bytes, UploadFile):
         file_or_bytes.file.seek(0)
         blob.upload_from_file(file_or_bytes.file, content_type=content_type)
-    else:
+    elif isinstance(file_or_bytes, bytes):
         blob.upload_from_string(file_or_bytes, content_type=content_type)
+    else:
+        raise HTTPException(status_code=500, detail="Unsupported file type for Firebase upload.")
 
     blob.make_public()
     return blob.public_url
