@@ -57,13 +57,19 @@ else:
 # Store session data
 session_data: Dict[str, Dict] = {}
 
-# ✅ Firebase upload helper with pointer fix
-def upload_cv_to_firebase(file: UploadFile, firebase_bucket) -> str:
+# ✅ Firebase upload helper
+def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: str) -> str:
     if not firebase_bucket:
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
-    file_contents = file.file.read()  # Read file into memory
-    blob = firebase_bucket.blob(f"cvs/{file.filename}")
-    blob.upload_from_string(file_contents, content_type=file.content_type)
+
+    blob = firebase_bucket.blob(path)
+
+    if isinstance(file_or_bytes, UploadFile):
+        file_or_bytes.file.seek(0)
+        blob.upload_from_file(file_or_bytes.file, content_type=content_type)
+    else:
+        blob.upload_from_string(file_or_bytes, content_type=content_type)
+
     blob.make_public()
     return blob.public_url
 
@@ -78,30 +84,35 @@ async def upload_cv(
     job_role: str = Form(...),
     question_type: str = Form("mixed")
 ):
-    logger.info(f"Received upload_cv request for company: {company_name}, role: {job_role}, file: {file.filename}")
+    session_id = f"{company_name}_{job_role}_{file.filename}"
+    logger.info(f"Received upload_cv request for session: {session_id}")
+
     try:
         if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
             raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
-        # ✅ Upload CV to Firebase
-        cv_public_url = upload_cv_to_firebase(file, bucket)
+        # ✅ Upload CV to Firebase in session folder
+        cv_path = f"sessions/{session_id}/cv/{file.filename}"
+        cv_public_url = upload_to_firebase(file, bucket, cv_path, file.content_type)
         logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
-        file.file.seek(0)  # Reset pointer for text extraction
-        cv_text = process_cv.extract_text_from_file(file)
+        # ✅ Extract CV text by downloading from Firebase
+        cv_text, _ = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
+
         if not cv_text.strip():
             raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
 
         company_info = search_company.search_company_info(company_name, job_role)
         company_info_json = json.loads(company_info)
 
+        # 🔊 Generate questions and upload audio to Firebase
         questions_data = question_generation.generate_questions(
             cv_text, company_info_json, job_role, company_name,
             selected_question_type=question_type,
-            firebase_bucket=bucket
+            firebase_bucket=bucket,
+            session_id=session_id
         )
 
-        session_id = f"{company_name}_{job_role}_{file.filename}"
         session_data[session_id] = {
             "cv_text": cv_text,
             "company_info": company_info_json,
@@ -144,6 +155,10 @@ async def evaluate_audio_response(
         question_data = questions[question_index]
         audio_data = await audio_file.read()
 
+        # Upload response to Firebase
+        response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
+        response_url = upload_to_firebase(audio_data, bucket, response_path, "audio/mpeg")
+
         wav_data = evaluate_response.convert_to_wav(audio_data)
         response_text = evaluate_response.transcribe_audio(wav_data)
 
@@ -155,7 +170,11 @@ async def evaluate_audio_response(
             response_text, question_data["question_text"], relevant_keywords, question_type, company_sector
         )
 
-        return JSONResponse(content={"feedback": result})
+        return JSONResponse(content={
+            "feedback": result,
+            "transcribed_text": response_text,
+            "response_audio_url": response_url
+        })
 
     except evaluate_response.TranscriptionError as e:
         raise HTTPException(status_code=400, detail=f"Audio transcription failed: {e}")

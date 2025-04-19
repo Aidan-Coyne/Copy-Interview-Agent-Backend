@@ -35,13 +35,15 @@ def get_text_to_speech_client():
         logging.error(f"Failed to initialize TTS client: {e}")
         raise
 
-def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket) -> str:
-    blob = firebase_bucket.blob(f"questions/{filename}")
+# ✅ Updated to include session folder structure
+def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket, session_id: str) -> str:
+    blob = firebase_bucket.blob(f"sessions/{session_id}/audio_questions/{filename}")
     blob.upload_from_file(BytesIO(audio_bytes), content_type="audio/mpeg")
-    blob.make_public()  # Optional, for direct frontend access
+    blob.make_public()
     return blob.public_url
 
-def generate_questions(cv_text, company_info, job_role, company_name, selected_question_type="mixed", firebase_bucket=None):
+# ✅ Updated to receive session_id
+def generate_questions(cv_text, company_info, job_role, company_name, selected_question_type="mixed", firebase_bucket=None, session_id: str = None):
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
     relevant_skills = extract_relevant_skills_from_role(job_role)
@@ -151,7 +153,8 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
                 continue
 
             filename = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i + 1}.mp3"
-            firebase_url = upload_audio_to_firebase(response.audio_content, filename, firebase_bucket)
+            firebase_url = upload_audio_to_firebase(response.audio_content, filename, firebase_bucket, session_id)
+
             logging.info(f"Uploaded question {i + 1} to Firebase: {firebase_url}")
 
             question_data.append({

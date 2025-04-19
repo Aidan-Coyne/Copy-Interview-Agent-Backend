@@ -3,64 +3,71 @@ from fastapi import UploadFile, HTTPException
 import logging
 from docx import Document
 from keyword_extraction import extract_keywords
+from google.cloud import storage
+import tempfile
+import os
 
 logging.basicConfig(level=logging.INFO)
 
-def extract_text_from_pdf(file: UploadFile) -> str:
+# 🔥 Download CV from Firebase
+def download_cv_from_firebase(session_id: str, filename: str, bucket: storage.Bucket) -> str:
     """
-    Extracts text from a PDF file.
+    Downloads a CV file from Firebase Storage into a local temp file.
+    Returns the local file path.
     """
+    blob_path = f"sessions/{session_id}/cv/{filename}"
+    blob = bucket.blob(blob_path)
+
+    if not blob.exists():
+        logging.error(f"CV file not found in Firebase: {blob_path}")
+        raise HTTPException(status_code=404, detail="CV not found in storage.")
+
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1])
+    blob.download_to_filename(temp_file.name)
+    logging.info(f"Downloaded CV from Firebase to: {temp_file.name}")
+    return temp_file.name
+
+def extract_text_from_pdf_path(file_path: str) -> str:
     try:
-        with pdfplumber.open(file.file) as pdf:
+        with pdfplumber.open(file_path) as pdf:
             text = "\n".join(page.extract_text() for page in pdf.pages if page.extract_text())
-        text = " ".join(text.split())
-        return text
-    except pdfplumber.PDFError:
-        logging.error("Invalid PDF file uploaded.")
-        raise HTTPException(status_code=400, detail="Invalid PDF file.")
+        return " ".join(text.split())
     except Exception as e:
         logging.error(f"Error extracting text from PDF: {e}")
-        raise HTTPException(status_code=500, detail=f"Error extracting text: {e}")
+        raise HTTPException(status_code=500, detail=f"Error extracting text from PDF: {e}")
 
-def extract_text_from_docx(file: UploadFile) -> str:
-    """
-    Extracts text from a Word document (.docx or .doc).
-    """
+def extract_text_from_docx_path(file_path: str) -> str:
     try:
-        doc = Document(file.file)
+        doc = Document(file_path)
         text = "\n".join(para.text for para in doc.paragraphs if para.text)
-        text = " ".join(text.split())
-        return text
+        return " ".join(text.split())
     except Exception as e:
         logging.error(f"Error extracting text from DOCX: {e}")
-        raise HTTPException(status_code=500, detail=f"Error extracting text: {e}")
+        raise HTTPException(status_code=500, detail=f"Error extracting text from DOCX: {e}")
 
-def extract_text_from_file(file: UploadFile) -> str:
-    """
-    Determines file type and extracts text accordingly.
-    Supports PDF and Word documents.
-    """
-    filename = file.filename.lower()
-    if filename.endswith(".pdf"):
-        return extract_text_from_pdf(file)
-    elif filename.endswith(".docx") or filename.endswith(".doc"):
-        return extract_text_from_docx(file)
+def extract_text_from_file_path(file_path: str) -> str:
+    if file_path.lower().endswith(".pdf"):
+        return extract_text_from_pdf_path(file_path)
+    elif file_path.lower().endswith((".doc", ".docx")):
+        return extract_text_from_docx_path(file_path)
     else:
-        logging.error("Unsupported file type uploaded.")
+        logging.error("Unsupported file type in Firebase download.")
         raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
-def extract_keywords_from_cv(file: UploadFile, top_n: int = 10) -> list:
+# ✅ NEW main entry point
+def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Bucket, top_n: int = 10) -> tuple:
     """
-    Extracts text from the file and returns a list of keywords using the keyword_extraction module.
+    Downloads and processes a CV from Firebase Storage.
+    Returns extracted text and top keywords.
     """
-    text = extract_text_from_file(file)
+    local_path = download_cv_from_firebase(session_id, filename, bucket)
+    text = extract_text_from_file_path(local_path)
     keywords = extract_keywords(text, top_n=top_n)
-    return keywords
 
-def process_cv(file: UploadFile, top_n: int = 10) -> tuple:
-    """
-    Processes a CV file (PDF or Word), returning the extracted text and keywords.
-    """
-    text = extract_text_from_file(file)
-    keywords = extract_keywords(text, top_n=top_n)
+    # Clean up the local file
+    try:
+        os.remove(local_path)
+    except Exception as e:
+        logging.warning(f"Failed to delete temp CV file: {e}")
+
     return text, keywords

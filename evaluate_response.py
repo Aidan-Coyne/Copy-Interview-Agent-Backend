@@ -1,217 +1,233 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
-import process_cv
-import search_company
-import question_generation
-import evaluate_response
-import uvicorn
-import logging
+import speech_recognition as sr
+import spacy
+from fuzzywuzzy import fuzz
 import json
-import os
-import shutil
+import logging
+from typing import List, Dict, Tuple, Any
+from fastapi import HTTPException
+from io import BytesIO
+import wave
+import subprocess, uuid, os
+import string
 import tempfile
-import uuid
-from typing import Dict
-from fastapi.middleware.cors import CORSMiddleware
+from google.cloud import storage
 
-# Firebase integration
-import firebase_admin
-from firebase_admin import credentials, storage
-
-app = FastAPI()
-
-# Enable CORS for frontend access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-print("CORS Middleware configured.")
-
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Firebase credentials patch for Railway
-google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-if google_creds_json:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
-        temp_file.write(google_creds_json.encode())
-        temp_path = temp_file.name
-    cred = credentials.Certificate(temp_path)
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': 'ai-interview-agent-e2f7b.appspot.com'
+nlp = spacy.load("en_core_web_sm")
+
+class TranscriptionError(Exception):
+    pass
+
+# ✅ NEW: Download user audio response from Firebase
+def download_user_response_from_firebase(session_id: str, question_index: int, bucket: storage.Bucket) -> bytes:
+    """
+    Downloads the user's recorded response audio from Firebase Storage and returns the raw bytes.
+    """
+    blob_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
+    blob = bucket.blob(blob_path)
+
+    if not blob.exists():
+        logger.error(f"Audio response not found in Firebase: {blob_path}")
+        raise HTTPException(status_code=404, detail="Audio response not found in storage.")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+        blob.download_to_filename(temp_file.name)
+        logger.info(f"Downloaded audio response to temp file: {temp_file.name}")
+
+    with open(temp_file.name, "rb") as f:
+        audio_bytes = f.read()
+
+    try:
+        os.remove(temp_file.name)
+    except Exception as e:
+        logger.warning(f"Failed to delete temp audio file: {e}")
+
+    return audio_bytes
+
+def convert_to_wav(audio_data: bytes) -> bytes:
+    input_filename = f"temp_{uuid.uuid4().hex}.webm"
+    output_filename = f"temp_{uuid.uuid4().hex}.wav"
+    try:
+        with open(input_filename, "wb") as f:
+            f.write(audio_data)
+
+        subprocess.run([
+            "ffmpeg", "-y", "-i", input_filename,
+            "-acodec", "pcm_s16le", output_filename
+        ], check=True)
+
+        with open(output_filename, "rb") as f:
+            wav_data = f.read()
+    finally:
+        if os.path.exists(input_filename):
+            os.remove(input_filename)
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
+
+    return wav_data
+
+def transcribe_audio(audio_data: bytes) -> str:
+    recognizer = sr.Recognizer()
+    try:
+        with wave.open(BytesIO(audio_data), 'rb') as wf:
+            sample_rate = wf.getframerate()
+            sample_width = wf.getsampwidth()
+            n_channels = wf.getnchannels()
+            logger.info(f"Audio properties: sample_rate={sample_rate}, sample_width={sample_width}, channels={n_channels}")
+
+        audio_data_sr = sr.AudioData(audio_data, sample_rate=sample_rate, sample_width=sample_width)
+        text = recognizer.recognize_google(audio_data_sr)
+        return text.lower()
+
+    except sr.UnknownValueError:
+        raise TranscriptionError("Could not understand audio. Please try speaking clearly.")
+    except sr.RequestError as e:
+        raise TranscriptionError(f"Speech recognition service error: {e}")
+    except Exception as e:
+        raise TranscriptionError(f"Error transcribing audio: {e}")
+
+def extract_company_keywords(company_info: str) -> List[str]:
+    try:
+        company_info_list = json.loads(company_info)
+        company_keywords = []
+
+        for item in company_info_list:
+            snippet = item.get("snippet", "").lower()
+            doc = nlp(snippet)
+            company_keywords.extend(token.lemma_ for token in doc if token.pos_ in {"NOUN", "VERB"})
+            company_keywords.extend(ent.text.lower() for ent in doc.ents)
+
+        return list(set(company_keywords))
+
+    except Exception as e:
+        logger.error(f"Error extracting company keywords: {e}")
+        return []
+
+def extract_skills_from_response(response_text: str) -> List[str]:
+    doc = nlp(response_text)
+    return list(set(token.text.lower() for token in doc if token.pos_ in {"NOUN", "VERB"}))
+
+def generate_improvement_suggestions(
+    response_text: str,
+    missing_keywords: List[str],
+    question_type: str,
+    relevant_keywords: List[str],
+    final_score: float,
+    keyword_score: float,
+    question_score: float,
+    weights: Dict[str, float]
+) -> List[Dict[str, str]]:
+    suggestions = []
+    suggestions.append({
+        "area": "Scoring Explanation",
+        "feedback": (
+            f"Your final score is {final_score} out of 10. This was calculated using: "
+            f"(Keyword Score: {keyword_score:.1f}% * {weights.get('keyword', 0)} + "
+            f"Question Relevance Score: {question_score:.1f} * {weights.get('question', 0)}) = {final_score * 10:.1f}% overall."
+        )
     })
-    bucket = storage.bucket()
 
-UPLOAD_FOLDER = "uploaded_cvs"
-USER_RESPONSES_FOLDER = "user_responses"
+    if missing_keywords:
+        suggestions.append({
+            "area": "Keyword Usage",
+            "feedback": f"Consider including these missing keywords: {', '.join(missing_keywords)}."
+        })
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(USER_RESPONSES_FOLDER, exist_ok=True)
+    if question_type == "behavioral":
+        suggestions.append({"area": "Behavioral Structure", "feedback": "Use the STAR method (Situation, Task, Action, Result)."})
+    elif question_type == "situational":
+        suggestions.append({"area": "Situational Strategy", "feedback": "Explain your reasoning and problem-solving steps."})
+    elif question_type == "technical":
+        suggestions.append({"area": "Technical Depth", "feedback": "Add specific tools, processes, or examples where possible."})
 
-app.mount("/user_responses", StaticFiles(directory=USER_RESPONSES_FOLDER), name="user_responses")
+    if len(response_text.split()) < 20:
+        suggestions.append({
+            "area": "Detail & Depth",
+            "feedback": "Try expanding your answer with more examples or explanations."
+        })
 
-session_data: Dict[str, Dict] = {}
+    return suggestions
 
-@app.get("/")
-def home():
-    return {"message": "Interview Agent Backend Running"}
+def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_name: str, company_info: str) -> Tuple[List[str], str]:
+    question_skills = question_data.get("skills", [])
+    question_experience = question_data.get("experience", "")
+    question_text = question_data.get("question_text", "").lower()
 
-@app.post("/upload_cv/")
-async def upload_cv(
-    file: UploadFile = File(...),
-    company_name: str = Form(...),
-    job_role: str = Form(...),
-    question_type: str = Form("mixed")
-):
-    logger.info(f"Received upload_cv request for company: {company_name}, role: {job_role}, file: {file.filename}")
-    try:
-        filename_lower = file.filename.lower()
+    company_keywords = extract_company_keywords(company_info)
+    job_role_lemma = nlp(job_role)[0].lemma_ if job_role else ""
+    company_name_lemma = nlp(company_name)[0].lemma_ if company_name else ""
 
-        if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".doc") or filename_lower.endswith(".docx")):
-            logger.error(f"Unsupported file type: {file.filename}")
-            raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
+    experience_doc = nlp(question_experience)
+    experience_lemma = experience_doc[0].lemma_ if len(experience_doc) > 0 else ""
 
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    all_keywords = set(
+        [nlp(skill)[0].lemma_.lower() for skill in question_skills if skill] +
+        ([experience_lemma.lower()] if experience_lemma else []) +
+        company_keywords +
+        [job_role_lemma.lower(), company_name_lemma.lower()]
+    )
 
-        logger.debug(f"File saved to {file_path}")
+    question_type = "general"
+    if "tell me about a time" in question_text or "describe a situation" in question_text:
+        question_type = "behavioral"
+    elif "how would you" in question_text:
+        question_type = "situational"
+    elif "skills" in question_text or "explain" in question_text:
+        question_type = "technical"
 
-        try:
-            cv_text = process_cv.extract_text_from_file(file)
-            logger.debug(f"Extracted CV text length: {len(cv_text)}")
-        except Exception as e:
-            logger.exception("Error extracting text from CV.")
-            raise HTTPException(status_code=500, detail=f"Error extracting CV text: {str(e)}")
+    return list(all_keywords), question_type
 
-        if not cv_text.strip():
-            logger.error("CV text extraction failed or is empty.")
-            raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
+def score_response(
+    response_text: str,
+    question_text: str,
+    relevant_keywords: List[str],
+    question_type: str
+) -> Dict[str, Any]:
+    doc = nlp(response_text)
 
-        try:
-            company_info = search_company.search_company_info(company_name, job_role)
-            logger.debug(f"Raw company_info from Brave API: {company_info}")
-            company_info_json = json.loads(company_info)
-        except Exception as e:
-            logger.exception("Error fetching or parsing company info.")
-            raise HTTPException(status_code=500, detail=f"Error fetching company info: {str(e)}")
+    response_tokens = [token.lemma_.lower().strip(string.punctuation)
+                       for token in doc if not token.is_stop and len(token.text) > 2]
 
-        logger.info(f"Company Info Retrieved: {company_info_json}")
-        logger.info(f"Generating {question_type} questions for {company_name} - {job_role}")
+    cleaned_keywords = [kw.lower().strip(string.punctuation) for kw in relevant_keywords if len(kw.strip()) > 2]
 
-        try:
-            questions_data = question_generation.generate_questions(
-                cv_text, company_info_json, job_role, company_name, selected_question_type=question_type, firebase_bucket=bucket
-            )
-            logger.debug(f"Questions Data Generated: {questions_data}")
-        except Exception as e:
-            logger.exception("Error in question_generation.generate_questions.")
-            raise HTTPException(status_code=500, detail=f"Error generating interview questions: {str(e)}")
+    matched_keywords = []
+    missing_keywords = []
+    threshold = 80
 
-        session_id = f"{company_name}_{job_role}_{file.filename}"
-        session_data[session_id] = {
-            "cv_text": cv_text,
-            "company_info": company_info_json,
-            "questions": questions_data,
-            "job_role": job_role,
-            "company_name": company_name
-        }
+    for kw in cleaned_keywords:
+        best_ratio = max(fuzz.partial_ratio(kw, token) for token in response_tokens)
+        if best_ratio >= threshold:
+            matched_keywords.append(kw)
+        else:
+            missing_keywords.append(kw)
 
-        return {
-            "session_id": session_id,
-            "cv_text": cv_text,
-            "company_info": company_info_json,
-            "questions_data": questions_data
-        }
+    keyword_score = (len(matched_keywords) / len(cleaned_keywords)) * 100 if cleaned_keywords else 0
+    question_score = fuzz.partial_ratio(response_text, question_text)
 
-    except HTTPException as http_exception:
-        logger.error(f"HTTP Exception: {http_exception.detail}")
-        raise http_exception
-    except Exception as e:
-        logger.exception("Unexpected error in upload_cv endpoint.")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+    if question_type == "technical":
+        weights = {"keyword": 0.5, "question": 0.5}
+    elif question_type == "behavioral":
+        weights = {"keyword": 0.3, "question": 0.7}
+    elif question_type == "situational":
+        weights = {"keyword": 0.3, "question": 0.7}
+    else:
+        weights = {"keyword": 0.4, "question": 0.6}
 
-@app.post("/evaluate_response/")
-async def evaluate_audio_response(
-    audio_file: UploadFile = File(...),
-    question_index: int = Form(...),
-    session_id: str = Form(...)
-):
-    try:
-        logger.info(f"Received evaluation request for session_id: {session_id}, question_index: {question_index}")
+    final_numeric = round((weights["keyword"] * keyword_score) + (weights["question"] * question_score), 2)
+    score_out_of_10 = round(final_numeric / 10, 1)
 
-        if session_id not in session_data:
-            raise HTTPException(status_code=400, detail="Session not found. Please generate questions first.")
+    suggestions = generate_improvement_suggestions(
+        response_text, missing_keywords, question_type, cleaned_keywords,
+        score_out_of_10, keyword_score, question_score, weights
+    )
 
-        session = session_data[session_id]
-        questions = session["questions"]
-
-        if question_index >= len(questions):
-            raise HTTPException(status_code=400, detail="Invalid question index.")
-
-        question_data = questions[question_index]
-        logger.info(f"Processing question {question_index}: {question_data}")
-
-        audio_data = await audio_file.read()
-        logger.info(f"Received audio file of length: {len(audio_data)} bytes")
-
-        try:
-            wav_data = evaluate_response.convert_to_wav(audio_data)
-        except Exception as conv_err:
-            logger.error(f"Error converting audio to WAV: {conv_err}")
-            raise HTTPException(status_code=400, detail=f"Audio conversion failed: {conv_err}")
-
-        # Upload user response to Firebase
-        blob = bucket.blob(f"user_responses/{uuid.uuid4().hex}.wav")
-        blob.upload_from_string(audio_data, content_type="audio/wav")
-        blob.make_public()
-        firebase_audio_url = blob.public_url
-
-        try:
-            response_text = evaluate_response.transcribe_audio(wav_data)
-        except evaluate_response.TranscriptionError as e:
-            logger.error(f"Transcription error: {e}")
-            raise HTTPException(status_code=400, detail=f"Audio transcription failed: {e}")
-
-        logger.info(f"Transcribed Response: {response_text}")
-
-        try:
-            relevant_keywords, question_type, company_sector = evaluate_response.get_relevant_keywords(
-                question_data, session["job_role"], session["company_name"], json.dumps(session["company_info"])
-            )
-            logger.info(f"Relevant Keywords: {relevant_keywords}, Question Type: {question_type}, Sector: {company_sector}")
-        except Exception as e:
-            logger.exception("Error getting relevant keywords.")
-            raise HTTPException(status_code=500, detail=f"Error determining relevant keywords: {str(e)}")
-
-        try:
-            result = evaluate_response.score_response(
-                response_text, question_data["question_text"], relevant_keywords, question_type, company_sector
-            )
-        except Exception as e:
-            logger.exception("Error scoring response.")
-            raise HTTPException(status_code=500, detail=f"Error scoring response: {str(e)}")
-
-        logger.info(f"Evaluation Result: {result}")
-        return JSONResponse(content={"feedback": result, "user_response_audio_url": firebase_audio_url})
-
-    except HTTPException as http_exception:
-        logger.error(f"HTTP Exception: {http_exception.detail}")
-        raise http_exception
-    except Exception as e:
-        logger.exception("Unexpected error in evaluate_response endpoint.")
-        raise HTTPException(status_code=500, detail=f"An error occurred while evaluating the response.")
-
-@app.post("/end_session/{session_id}")
-def end_session(session_id: str):
-    if session_id in session_data:
-        del session_data[session_id]
-        logger.info(f"Session {session_id} data removed from session_data.")
-    return {"message": f"Session {session_id} ended successfully."}
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {
+        "score": score_out_of_10,
+        "keyword_matches": matched_keywords,
+        "expected_keywords": cleaned_keywords,
+        "skills_shown": extract_skills_from_response(response_text),
+        "improvement_suggestions": suggestions,
+        "transcribed_text": response_text
+    }
