@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import firebase_admin
 from firebase_admin import credentials, storage
 
+print("🔥 FastAPI app starting...")
 app = FastAPI()
 
 # ✅ CORS
