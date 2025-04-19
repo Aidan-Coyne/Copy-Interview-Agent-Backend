@@ -43,7 +43,7 @@ if google_creds_json:
         cred = credentials.Certificate(temp_path)
         if not firebase_admin._apps:
             firebase_admin.initialize_app(cred, {
-                'storageBucket': 'ai-interview-agent-e2f7b.appspot.com'
+                'storageBucket': 'ai-interview-agent-e2f7b.firebasestorage.app'
             })
             logger.info("✅ Firebase initialized.")
         bucket = storage.bucket()
