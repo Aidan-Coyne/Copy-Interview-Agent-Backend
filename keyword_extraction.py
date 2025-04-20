@@ -20,7 +20,12 @@ _model_start = time.time()
 
 # Adjust path to wherever your ONNX file lives in the container
 ONNX_PATH   = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
-TOKENIZER   = AutoTokenizer.from_pretrained("paraphrase-MiniLM-L3-v2")
+# Load tokenizer with correct model ID and optional HF token
+TOKENIZER   = AutoTokenizer.from_pretrained(
+    "sentence-transformers/paraphrase-MiniLM-L3-v2",
+    use_auth_token=os.getenv("HUGGINGFACE_HUB_TOKEN", None)
+)
+# Initialize ONNX runtime session
 SESSION     = rt.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
 
 logger.info(f"Loaded ONNX model in {time.time() - _model_start:.2f}s")
@@ -57,7 +62,6 @@ class ONNXEmbedder(BaseEmbedder):
 onnx_embedder = ONNXEmbedder(SESSION, TOKENIZER)
 kw_model      = KeyBERT(model=onnx_embedder)
 
-
 # ─── Noise‑word filtering ───────────────────────────────────────────────────────
 STOPWORDS = {
     "linkedin", "profile", "cv", "resume", "email", "phone", "contact",
@@ -73,7 +77,6 @@ def clean_keyword(keyword: str) -> bool:
     if keyword.lower() in STOPWORDS:
         return False
     return True
-
 
 # ─── Main extraction function ─────────────────────────────────────────────────
 def extract_keywords(
