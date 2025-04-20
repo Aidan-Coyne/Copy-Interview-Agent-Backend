@@ -58,20 +58,25 @@ else:
 # Store session data
 session_data: Dict[str, Dict] = {}
 
-# ✅ Firebase upload helper
+# ✅ Firebase upload helper (FIXED)
 def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: str) -> str:
     if not firebase_bucket:
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
 
     blob = firebase_bucket.blob(path)
 
-    if isinstance(file_or_bytes, UploadFile):
-        file_or_bytes.file.seek(0)
-        blob.upload_from_file(file_or_bytes.file, content_type=content_type)
-    elif isinstance(file_or_bytes, bytes):
-        blob.upload_from_string(file_or_bytes, content_type=content_type)
-    else:
-        raise HTTPException(status_code=500, detail="Unsupported file type for Firebase upload.")
+    try:
+        if isinstance(file_or_bytes, UploadFile):
+            file_or_bytes.file.seek(0)
+            data = file_or_bytes.file.read()
+            blob.upload_from_string(data, content_type=content_type)
+        elif isinstance(file_or_bytes, bytes):
+            blob.upload_from_string(file_or_bytes, content_type=content_type)
+        else:
+            raise HTTPException(status_code=500, detail="Unsupported file type for Firebase upload.")
+    except Exception as e:
+        logger.error(f"🔥 Firebase upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Error uploading file to Firebase.")
 
     blob.make_public()
     return blob.public_url
