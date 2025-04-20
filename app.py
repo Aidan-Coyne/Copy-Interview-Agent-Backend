@@ -58,7 +58,7 @@ else:
 # Store session data
 session_data: Dict[str, Dict] = {}
 
-# ✅ Firebase upload helper (FIXED)
+# ✅ Firebase upload helper
 def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: str) -> str:
     if not firebase_bucket:
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
@@ -66,11 +66,7 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
     blob = firebase_bucket.blob(path)
 
     try:
-        if isinstance(file_or_bytes, UploadFile):
-            file_or_bytes.file.seek(0)
-            data = file_or_bytes.file.read()
-            blob.upload_from_string(data, content_type=content_type)
-        elif isinstance(file_or_bytes, bytes):
+        if isinstance(file_or_bytes, bytes):
             blob.upload_from_string(file_or_bytes, content_type=content_type)
         else:
             raise HTTPException(status_code=500, detail="Unsupported file type for Firebase upload.")
@@ -101,7 +97,8 @@ async def upload_cv(
 
         # ✅ Upload CV to Firebase in session folder
         cv_path = f"sessions/{session_id}/cv/{file.filename}"
-        cv_public_url = upload_to_firebase(file, bucket, cv_path, file.content_type)
+        file_bytes = await file.read()
+        cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
         logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
         # ✅ Extract CV text by downloading from Firebase
