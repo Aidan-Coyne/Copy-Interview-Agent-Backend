@@ -1,13 +1,16 @@
 import re
 import logging
+import time
 from keybert import KeyBERT
+from sentence_transformers import SentenceTransformer
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize the KeyBERT model
-kw_model = KeyBERT()
+# ✅ Initialize the SentenceTransformer model only once
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+kw_model = KeyBERT(model=embedding_model)
 
 # Define a set of common noise words or terms to ignore
 STOPWORDS = set([
@@ -35,15 +38,17 @@ def extract_keywords(text: str, top_n: int = 10, min_len: int = 3) -> list:
     """
     Extracts a list of keywords from the input text using KeyBERT,
     and then cleans the results by filtering out noisy or irrelevant keywords.
-    
+
     Args:
         text (str): The text from which to extract keywords.
         top_n (int): Maximum number of keywords to extract (default is 10).
         min_len (int): Minimum length for a valid keyword (default is 3).
-    
+
     Returns:
         list: A list of extracted and cleaned keywords.
     """
+    start_time = time.time()
+
     if not text or len(text) < 50:
         logger.warning("Input text is too short for reliable keyword extraction.")
         return []
@@ -65,6 +70,7 @@ def extract_keywords(text: str, top_n: int = 10, min_len: int = 3) -> list:
                 cleaned_keywords.append(kw)
 
         logger.info(f"Extracted and cleaned keywords: {cleaned_keywords}")
+        logger.info(f"⏱ Keyword extraction duration: {time.time() - start_time:.2f}s")
         return cleaned_keywords
 
     except Exception as e:
