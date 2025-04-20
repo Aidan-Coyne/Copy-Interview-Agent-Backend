@@ -8,7 +8,7 @@ from google.cloud import texttospeech
 from google.oauth2 import service_account
 from job_role_library import job_role_library
 from sector_library import sector_library
-from keyword_extraction import extract_keywords
+from keyword_extraction import extract_keywords  # ONNX‑backed extractor
 from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +22,9 @@ generic_skill_phrases = [
 ]
 
 def get_text_to_speech_client():
+    """
+    Initialize Google Cloud Text-to-Speech client using service account JSON.
+    """
     try:
         google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
         if not google_creds_json:
@@ -35,17 +38,31 @@ def get_text_to_speech_client():
         logging.error(f"Failed to initialize TTS client: {e}")
         raise
 
-# ✅ Updated to include session folder structure
 def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket, session_id: str) -> str:
+    """
+    Uploads TTS audio bytes to Firebase under the given session.
+    """
     blob = firebase_bucket.blob(f"sessions/{session_id}/audio_questions/{filename}")
     blob.upload_from_file(BytesIO(audio_bytes), content_type="audio/mpeg")
     blob.make_public()
     return blob.public_url
 
-# ✅ Updated to receive session_id
-def generate_questions(cv_text, company_info, job_role, company_name, selected_question_type="mixed", firebase_bucket=None, session_id: str = None):
+def generate_questions(
+    cv_text: str,
+    company_info: dict,
+    job_role: str,
+    company_name: str,
+    selected_question_type: str = "mixed",
+    firebase_bucket=None,
+    session_id: str = None,
+    cv_embeddings: any = None  # New param for precomputed embeddings
+) -> list[dict]:
+    """
+    Generate interview questions (text + audio) based on CV, company info, and cached embeddings.
+    """
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
+    # 1) Role & experience extraction
     relevant_skills = extract_relevant_skills_from_role(job_role)
     relevant_experience = extract_relevant_experience(cv_text)
     company_sectors = extract_sectors(company_info)
@@ -54,32 +71,25 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
         relevant_skills = random.sample(generic_skill_phrases, 2)
     relevant_experience = relevant_experience or "your field"
 
-    cv_keywords = extract_keywords(cv_text, top_n=10)
-    selected_cv_keywords = random.sample(cv_keywords, min(3, len(cv_keywords)))
+    # 2) CV keywords using ONNX embedder + cached embeddings
+    cv_keywords = extract_keywords(cv_text, top_n=10, embeddings=cv_embeddings)
+    selected_cv_keywords = random.sample(cv_keywords, min(3, len(cv_keywords))) if cv_keywords else []
+
+    # Build CV‑insight questions
     cv_insight_questions = []
-    if len(selected_cv_keywords) >= 1:
+    for idx, kw in enumerate(selected_cv_keywords[:3]):
         cv_insight_questions.append((
             "cv_insight",
-            f"Your CV mentions '{selected_cv_keywords[0]}'. Can you elaborate on how this experience helped shape your skills?"
-        ))
-    if len(selected_cv_keywords) >= 2:
-        cv_insight_questions.append((
-            "cv_insight",
-            f"How did your involvement with '{selected_cv_keywords[1]}' contribute to your professional development?"
-        ))
-    if len(selected_cv_keywords) >= 3:
-        cv_insight_questions.append((
-            "cv_insight",
-            f"Could you share more context about your work related to '{selected_cv_keywords[2]}'?"
+            f"Your CV mentions '{kw}'. Can you elaborate on how this experience helped shape your skills?"
         ))
 
+    # 3) Question pools
     technical_questions = [
-        ("technical", f"Based on your CV, tell me about your experience with {relevant_skills[0]}."),
-        ("technical", f"Can you describe a project where you demonstrated {relevant_skills[1]} skills?"),
+        ("technical", f"Based on your CV, tell me about your experience with {relevant_skills[0]}.") if len(relevant_skills) > 0 else None,
+        ("technical", f"Can you describe a project where you demonstrated {relevant_skills[1]} skills?") if len(relevant_skills) > 1 else None,
         ("technical", f"Tell me about your most relevant experience in {relevant_experience}."),
         ("technical", f"How do your skills align with {company_name}'s work in {company_sectors}.") if company_sectors else None,
         ("technical", f"Can you describe a technical challenge relevant to the {company_sectors} sector and how you overcame it?") if company_sectors else None,
-        ("technical", f"What are the most important technical trends shaping the {company_sectors} industry right now?") if company_sectors else None,
         ("technical", "Describe a situation where you had to overcome a challenging technical problem."),
         ("technical", "How do you stay updated with the latest advancements in your field?"),
         ("technical", "Explain a complex concept you recently learned and how it impacted your work."),
@@ -121,51 +131,54 @@ def generate_questions(cv_text, company_info, job_role, company_name, selected_q
         ("situational", "What would be your first steps when starting a new project in an unfamiliar area?")
     ]
 
+    # 4) Select pool
     if selected_question_type.lower() == "technical":
-        question_pool = technical_questions
+        pool = technical_questions
     elif selected_question_type.lower() == "behavioral":
-        question_pool = behavioral_questions
+        pool = behavioral_questions
     elif selected_question_type.lower() == "situational":
-        question_pool = situational_questions
+        pool = situational_questions
     else:
-        question_pool = technical_questions + behavioral_questions + situational_questions + cv_insight_questions
+        pool = technical_questions + behavioral_questions + situational_questions + cv_insight_questions
 
-    question_pool = [q for q in question_pool if q and isinstance(q, tuple) and len(q) == 2]
-    selected_questions = random.sample(question_pool, 8) if len(question_pool) > 8 else question_pool
+    pool = [q for q in pool if q]  # drop None
+    selected_questions = random.sample(pool, min(8, len(pool)))
 
+    # 5) Text-to-Speech
     client = get_text_to_speech_client()
-    voice_params = texttospeech.VoiceSelectionParams(
+    voice = texttospeech.VoiceSelectionParams(
         language_code="en-GB",
         name="en-GB-Wavenet-B",
         ssml_gender=texttospeech.SsmlVoiceGender.MALE,
     )
-    audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+    audio_conf = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
 
     question_data = []
-    for i, (q_type, question) in enumerate(selected_questions):
+    for i, (q_type, text) in enumerate(selected_questions):
         try:
-            ssml_text = f"<speak><prosody rate='1' pitch='-10%'>{question}</prosody></speak>"
-            synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
-            response = client.synthesize_speech(input=synthesis_input, voice=voice_params, audio_config=audio_config)
-
-            if not response.audio_content:
-                logging.error(f"No audio content returned for question {i + 1}: {question}")
+            ssml = f"<speak><prosody rate='1' pitch='-10%'>{text}</prosody></speak>"
+            resp = client.synthesize_speech(
+                input=texttospeech.SynthesisInput(ssml=ssml),
+                voice=voice,
+                audio_config=audio_conf
+            )
+            if not resp.audio_content:
+                logging.error(f"No audio for Q{i+1}")
                 continue
 
-            filename = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i + 1}.mp3"
-            firebase_url = upload_audio_to_firebase(response.audio_content, filename, firebase_bucket, session_id)
-
-            logging.info(f"Uploaded question {i + 1} to Firebase: {firebase_url}")
+            fname = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i+1}.mp3"
+            url   = upload_audio_to_firebase(resp.audio_content, fname, firebase_bucket, session_id)
+            logging.info(f"Uploaded question {i+1} to Firebase: {url}")
 
             question_data.append({
-                "question_text": question,
-                "audio_file": firebase_url,
+                "question_text": text,
+                "audio_file": url,
                 "skills": relevant_skills,
                 "experience": relevant_experience,
                 "question_type": q_type
             })
         except Exception as e:
-            logging.error(f"Error generating audio for question {i + 1}: {e}")
+            logging.error(f"Error generating audio for question {i+1}: {e}")
 
     return question_data
 
@@ -181,13 +194,16 @@ def extract_relevant_skills_from_role(job_role: str):
 
 def extract_relevant_experience(cv_text: str):
     doc = nlp(cv_text)
-    experience_terms = [token.text.lower() for token in doc if token.pos_ in ["NOUN", "VERB"] and len(token.text) > 2]
-    return ", ".join(experience_terms[:2]) if experience_terms else "your field"
+    terms = [
+        token.text.lower()
+        for token in doc
+        if token.pos_ in ["NOUN", "VERB"] and len(token.text) > 2
+    ]
+    return ", ".join(terms[:2]) if terms else "your field"
 
-def extract_sectors(company_info):
+def extract_sectors(company_info: dict):
     matched_sectors = set()
-    search_results = company_info.get("search_results", [])
-    for item in search_results:
+    for item in company_info.get("search_results", []):
         snippet = item.get("snippet", "").lower()
         for sector, keywords in sector_library.items():
             for keyword in keywords:

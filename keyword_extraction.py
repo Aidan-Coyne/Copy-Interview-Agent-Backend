@@ -2,26 +2,63 @@ import os
 import re
 import logging
 import time
+import numpy as np
+import onnxruntime as rt
+from transformers import AutoTokenizer
+from keybert import KeyBERT
+from keybert.backend._base import BaseEmbedder
 
-# Ensure HF transformers cache is in /tmp (persisted during container lifetime)
+# Persist transformers cache in /tmp across container lifetime
 os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface"
 
-from keybert import KeyBERT
-from sentence_transformers import SentenceTransformer
-
-# Initialize logging
+# ─── Logging setup ──────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Preload embedding & KeyBERT models ─────────────────────────────────────────
+# ─── Load tokenizer & ONNX session at startup ──────────────────────────────────
 _model_start = time.time()
-# Use a lighter, faster model
-embedding_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
-kw_model = KeyBERT(model=embedding_model)
-logger.info(f"⏱ Loaded embedding & KeyBERT models in {time.time() - _model_start:.2f}s")
-# ────────────────────────────────────────────────────────────────────────────────
 
-# Define a set of common noise words or terms to ignore
+# Adjust path to wherever your ONNX file lives in the container
+ONNX_PATH   = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
+TOKENIZER   = AutoTokenizer.from_pretrained("paraphrase-MiniLM-L3-v2")
+SESSION     = rt.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
+
+logger.info(f"Loaded ONNX model in {time.time() - _model_start:.2f}s")
+
+# ─── ONNX embedder for KeyBERT ──────────────────────────────────────────────────
+class ONNXEmbedder(BaseEmbedder):
+    def __init__(self, session: rt.InferenceSession, tokenizer: AutoTokenizer):
+        self.sess      = session
+        self.tokenizer = tokenizer
+        # Map ONNX input/output names
+        inputs        = {inp.name: inp.name for inp in session.get_inputs()}
+        self.input_ids      = inputs.get("input_ids", list(inputs)[0])
+        self.attention_mask = inputs.get("attention_mask", list(inputs)[1])
+        self.output_name    = session.get_outputs()[0].name
+
+    def embed(self, documents: list[str]) -> np.ndarray:
+        # Tokenize + convert to numpy arrays
+        enc = self.tokenizer(
+            documents,
+            return_tensors="np",
+            padding=True,
+            truncation=True,
+            max_length=512
+        )
+        ort_inputs = {
+            self.input_ids:      enc["input_ids"],
+            self.attention_mask: enc["attention_mask"]
+        }
+        # Run ONNX Runtime
+        embeddings = self.sess.run([self.output_name], ort_inputs)[0]
+        return embeddings
+
+# Instantiate KeyBERT with ONNX backend
+onnx_embedder = ONNXEmbedder(SESSION, TOKENIZER)
+kw_model      = KeyBERT(model=onnx_embedder)
+
+
+# ─── Noise‑word filtering ───────────────────────────────────────────────────────
 STOPWORDS = {
     "linkedin", "profile", "cv", "resume", "email", "phone", "contact",
     "january", "february", "march", "april", "may", "june", "july",
@@ -29,12 +66,6 @@ STOPWORDS = {
 }
 
 def clean_keyword(keyword: str) -> bool:
-    """
-    Determines whether a keyword is valid:
-    - Ignores numeric-only terms or those too short.
-    - Excludes contact-like patterns.
-    - Excludes common stopwords.
-    """
     if keyword.isdigit() or len(keyword) < 3:
         return False
     if re.search(r"[\d]{2,}", keyword) or "+" in keyword or "@" in keyword:
@@ -43,45 +74,52 @@ def clean_keyword(keyword: str) -> bool:
         return False
     return True
 
-def extract_keywords(text: str, top_n: int = 10, min_len: int = 3) -> list:
+
+# ─── Main extraction function ─────────────────────────────────────────────────
+def extract_keywords(
+    text: str,
+    top_n: int    = 10,
+    min_len: int  = 3,
+    embeddings: np.ndarray | None = None
+) -> list[str]:
     """
-    Extracts a list of keywords from the input text using KeyBERT,
-    and then cleans the results by filtering out noisy or irrelevant keywords.
+    Extracts keywords using KeyBERT + ONNX embeddings.
 
     Args:
-        text (str): The text from which to extract keywords.
-        top_n (int): Maximum number of keywords to extract (default is 10).
-        min_len (int): Minimum length for a valid keyword (default is 3).
-
+      text (str): full document text
+      top_n (int): how many keywords to return
+      embeddings (np.ndarray|null):
+          If provided, KeyBERT will reuse these (shape must match [1, dim]).
     Returns:
-        list: A list of extracted and cleaned keywords.
+      List of cleaned keywords.
     """
-    start = time.time()
     if not text or len(text) < 50:
-        logger.warning("Input text is too short for reliable keyword extraction.")
+        logger.warning("Input text too short for reliable extraction.")
         return []
 
+    start = time.time()
     try:
         raw = kw_model.extract_keywords(
             text,
             keyphrase_ngram_range=(1, 2),
-            use_mmr=True,             # Maximal marginal relevance for more diverse
-            nr_candidates=20,         # generate more candidates and then pick top_n
-            top_n=top_n
+            use_mmr=True,
+            nr_candidates=20,
+            top_n=top_n,
+            embeddings=embeddings
         )
         logger.info(f"Raw KeyBERT candidates: {raw}")
 
+        # Clean & filter
         cleaned = []
         for item in raw:
             kw = item[0] if isinstance(item, tuple) else item
             if len(kw) >= min_len and clean_keyword(kw):
                 cleaned.append(kw)
 
-        duration = time.time() - start
         logger.info(f"Extracted & cleaned keywords: {cleaned}")
-        logger.info(f"⏱ Keyword extraction took {duration:.2f}s")
+        logger.info(f"⏱ Keyword extraction took {time.time() - start:.2f}s")
         return cleaned
 
     except Exception as e:
-        logger.error(f"❌ Error during keyword extraction: {e}")
+        logger.error(f"Error during keyword extraction: {e}", exc_info=True)
         return []

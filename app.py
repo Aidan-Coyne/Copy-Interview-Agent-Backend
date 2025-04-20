@@ -1,3 +1,8 @@
+import os
+# Set threading to use available CPU cores efficiently
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -8,10 +13,12 @@ import evaluate_response
 import uvicorn
 import logging
 import json
-import os
 import tempfile
 from typing import Dict
 from fastapi.middleware.cors import CORSMiddleware
+
+# Import ONNX embedder for caching CV embeddings
+from keyword_extraction import onnx_embedder
 
 # Firebase integration
 import firebase_admin
@@ -55,7 +62,7 @@ if google_creds_json:
 else:
     logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
 
-# Store session data
+# Store session data, including precomputed embeddings
 session_data: Dict[str, Dict] = {}
 
 # ✅ Firebase upload helper
@@ -64,7 +71,6 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
 
     blob = firebase_bucket.blob(path)
-
     try:
         if isinstance(file_or_bytes, bytes):
             blob.upload_from_string(file_or_bytes, content_type=content_type)
@@ -95,36 +101,47 @@ async def upload_cv(
         if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
             raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
-        # ✅ Upload CV to Firebase in session folder
+        # Upload CV to Firebase
         cv_path = f"sessions/{session_id}/cv/{file.filename}"
         file_bytes = await file.read()
         cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
         logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
-        # ✅ Extract CV text by downloading from Firebase
+        # Extract CV text
         cv_text, _ = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
-
         if not cv_text.strip():
             raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
 
+        # Precompute and cache CV embeddings (ONNX)
+        cv_embeddings = onnx_embedder.embed([cv_text])
+        session_data[session_id] = {
+            "cv_text": cv_text,
+            "cv_embeddings": cv_embeddings,
+        }
+
+        # Fetch company info
         company_info = search_company.search_company_info(company_name, job_role)
         company_info_json = json.loads(company_info)
 
-        # 🔊 Generate questions and upload audio to Firebase
+        # Generate questions and upload audio (pass cached embeddings)
         questions_data = question_generation.generate_questions(
-            cv_text, company_info_json, job_role, company_name,
+            cv_text=cv_text,
+            company_info=company_info_json,
+            job_role=job_role,
+            company_name=company_name,
             selected_question_type=question_type,
             firebase_bucket=bucket,
-            session_id=session_id
+            session_id=session_id,
+            cv_embeddings=cv_embeddings  # use precomputed embeddings
         )
 
-        session_data[session_id] = {
-            "cv_text": cv_text,
+        # Store rest of session data
+        session_data[session_id].update({
             "company_info": company_info_json,
             "questions": questions_data,
             "job_role": job_role,
             "company_name": company_name
-        }
+        })
 
         return {
             "session_id": session_id,
@@ -152,27 +169,36 @@ async def evaluate_audio_response(
             raise HTTPException(status_code=400, detail="Session not found. Please generate questions first.")
 
         session = session_data[session_id]
-        questions = session["questions"]
-
+        questions = session.get("questions", [])
         if question_index >= len(questions):
             raise HTTPException(status_code=400, detail="Invalid question index.")
 
         question_data = questions[question_index]
         audio_data = await audio_file.read()
 
-        # Upload response to Firebase
+        # Upload response audio
         response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
         response_url = upload_to_firebase(audio_data, bucket, response_path, "audio/mpeg")
 
+        # Convert & transcribe
         wav_data = evaluate_response.convert_to_wav(audio_data)
         response_text = evaluate_response.transcribe_audio(wav_data)
 
-        relevant_keywords, question_type, company_sector = evaluate_response.get_relevant_keywords(
-            question_data, session["job_role"], session["company_name"], json.dumps(session["company_info"])
-        )
+        # Score response
+        relevant_keywords, question_type, company_sector = \
+            evaluate_response.get_relevant_keywords(
+                question_data,
+                session["job_role"],
+                session["company_name"],
+                json.dumps(session["company_info"])
+            )
 
         result = evaluate_response.score_response(
-            response_text, question_data["question_text"], relevant_keywords, question_type, company_sector
+            response_text,
+            question_data["question_text"],
+            relevant_keywords,
+            question_type,
+            company_sector
         )
 
         return JSONResponse(content={
