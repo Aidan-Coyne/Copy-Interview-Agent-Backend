@@ -2,22 +2,49 @@ import os
 import re
 import logging
 import time
+import json
+
 import numpy as np
 import onnxruntime as rt
 from transformers import AutoTokenizer
 from keybert import KeyBERT
 from keybert.backend._base import BaseEmbedder
 
-# Persist transformers cache in /tmp across container lifetime
-os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface"
+import firebase_admin
+from firebase_admin import credentials, storage
 
 # ─── Logging setup ──────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Locate the ONNX model on disk ───────────────────────────────────────────────
-HERE      = os.path.dirname(__file__)
-ONNX_PATH = os.path.join(HERE, "models", "paraphrase-MiniLM-L3-v2.onnx")
+# ─── Firebase initialization ───────────────────────────────────────────────────
+# Expect your service‑account JSON (the same one your app.py uses) in this env var:
+creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", None)
+if not creds_json:
+    raise RuntimeError("Set GOOGLE_APPLICATION_CREDENTIALS_JSON to your service account JSON")
+
+creds_dict = json.loads(creds_json)
+if not firebase_admin._apps:
+    cred = credentials.Certificate(creds_dict)
+    firebase_admin.initialize_app(cred, {
+        "storageBucket": "ai-interview-agent-e2f7b.firebasestorage.app"
+    })
+bucket = storage.bucket()
+
+# ─── Prepare local models folder ────────────────────────────────────────────────
+HERE        = os.path.dirname(__file__)
+MODELS_DIR  = os.path.join(HERE, "models")
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+REMOTE_ONNX_PATH = "models/paraphrase-MiniLM-L3-v2.onnx"
+LOCAL_ONNX_PATH  = os.path.join(MODELS_DIR, "paraphrase-MiniLM-L3-v2.onnx")
+
+# ─── Download ONNX model from Firebase if missing ───────────────────────────────
+if not os.path.exists(LOCAL_ONNX_PATH):
+    logger.info("Downloading ONNX model from Firebase…")
+    blob = bucket.blob(REMOTE_ONNX_PATH)
+    blob.download_to_filename(LOCAL_ONNX_PATH)
+    logger.info("✅ Download complete.")
 
 # ─── Load tokenizer & ONNX session at startup ──────────────────────────────────
 _model_start = time.time()
@@ -26,9 +53,9 @@ TOKENIZER = AutoTokenizer.from_pretrained(
     "sentence-transformers/paraphrase-MiniLM-L3-v2",
     use_auth_token=os.getenv("HUGGINGFACE_HUB_TOKEN", None)
 )
-SESSION = rt.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
+SESSION = rt.InferenceSession(LOCAL_ONNX_PATH, providers=["CPUExecutionProvider"])
 
-logger.info(f"⏱ Loaded ONNX model in {time.time() - _model_start:.2f}s")
+logger.info(f"Loaded ONNX model in {time.time() - _model_start:.2f}s")
 
 # ─── ONNX embedder for KeyBERT ──────────────────────────────────────────────────
 class ONNXEmbedder(BaseEmbedder):
@@ -82,17 +109,6 @@ def extract_keywords(
     min_len: int  = 3,
     embeddings: np.ndarray | None = None
 ) -> list[str]:
-    """
-    Extracts keywords using KeyBERT + ONNX embeddings.
-
-    Args:
-      text (str): full document text
-      top_n (int): how many keywords to return
-      embeddings (np.ndarray|null):
-          If provided, KeyBERT will reuse these (shape must match [1, dim]).
-    Returns:
-      List of cleaned keywords.
-    """
     if not text or len(text) < 50:
         logger.warning("Input text too short for reliable extraction.")
         return []
