@@ -1,6 +1,11 @@
+import os
 import re
 import logging
 import time
+
+# Ensure HF transformers cache is in /tmp (persisted during container lifetime)
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface"
+
 from keybert import KeyBERT
 from sentence_transformers import SentenceTransformer
 
@@ -8,16 +13,20 @@ from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Initialize the SentenceTransformer model only once
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+# ─── Preload embedding & KeyBERT models ─────────────────────────────────────────
+_model_start = time.time()
+# Use a lighter, faster model
+embedding_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
 kw_model = KeyBERT(model=embedding_model)
+logger.info(f"⏱ Loaded embedding & KeyBERT models in {time.time() - _model_start:.2f}s")
+# ────────────────────────────────────────────────────────────────────────────────
 
 # Define a set of common noise words or terms to ignore
-STOPWORDS = set([
+STOPWORDS = {
     "linkedin", "profile", "cv", "resume", "email", "phone", "contact",
     "january", "february", "march", "april", "may", "june", "july",
     "august", "september", "october", "november", "december"
-])
+}
 
 def clean_keyword(keyword: str) -> bool:
     """
@@ -47,32 +56,32 @@ def extract_keywords(text: str, top_n: int = 10, min_len: int = 3) -> list:
     Returns:
         list: A list of extracted and cleaned keywords.
     """
-    start_time = time.time()
-
+    start = time.time()
     if not text or len(text) < 50:
         logger.warning("Input text is too short for reliable keyword extraction.")
         return []
 
     try:
-        raw_keywords = kw_model.extract_keywords(text, keyphrase_ngram_range=(1, 2), top_n=top_n)
-        logger.info(f"Raw keywords from KeyBERT: {raw_keywords}")
+        raw = kw_model.extract_keywords(
+            text,
+            keyphrase_ngram_range=(1, 2),
+            use_mmr=True,             # Maximal marginal relevance for more diverse
+            nr_candidates=20,         # generate more candidates and then pick top_n
+            top_n=top_n
+        )
+        logger.info(f"Raw KeyBERT candidates: {raw}")
 
-        cleaned_keywords = []
-        for item in raw_keywords:
-            if isinstance(item, tuple) and len(item) == 2:
-                kw = item[0]
-            elif isinstance(item, str):
-                kw = item
-            else:
-                continue  # Skip unexpected structures
-
+        cleaned = []
+        for item in raw:
+            kw = item[0] if isinstance(item, tuple) else item
             if len(kw) >= min_len and clean_keyword(kw):
-                cleaned_keywords.append(kw)
+                cleaned.append(kw)
 
-        logger.info(f"Extracted and cleaned keywords: {cleaned_keywords}")
-        logger.info(f"⏱ Keyword extraction duration: {time.time() - start_time:.2f}s")
-        return cleaned_keywords
+        duration = time.time() - start
+        logger.info(f"Extracted & cleaned keywords: {cleaned}")
+        logger.info(f"⏱ Keyword extraction took {duration:.2f}s")
+        return cleaned
 
     except Exception as e:
-        logger.error(f"Error during keyword extraction: {e}")
+        logger.error(f"❌ Error during keyword extraction: {e}")
         return []
