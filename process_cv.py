@@ -6,15 +6,12 @@ from keyword_extraction import extract_keywords
 from google.cloud import storage
 import tempfile
 import os
+import time
 
 logging.basicConfig(level=logging.INFO)
 
 # 🔥 Download CV from Firebase
 def download_cv_from_firebase(session_id: str, filename: str, bucket: storage.Bucket) -> str:
-    """
-    Downloads a CV file from Firebase Storage into a local temp file.
-    Returns the local file path.
-    """
     blob_path = f"sessions/{session_id}/cv/{filename}"
     blob = bucket.blob(blob_path)
 
@@ -62,22 +59,29 @@ def extract_text_from_file_path(file_path: str) -> str:
 
 # ✅ Main CV processing entry point
 def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Bucket, top_n: int = 10) -> tuple:
-    """
-    Downloads and processes a CV from Firebase Storage.
-    Returns extracted text and top keywords.
-    """
-    local_path = download_cv_from_firebase(session_id, filename, bucket)
-    text = extract_text_from_file_path(local_path)
+    start = time.time()
 
+    logging.info("⏱ Starting CV processing pipeline...")
+    local_path = download_cv_from_firebase(session_id, filename, bucket)
+    logging.info(f"⏱ Firebase download time: {time.time() - start:.2f}s")
+
+    text_start = time.time()
+    text = extract_text_from_file_path(local_path)
+    logging.info(f"⏱ Text extraction time: {time.time() - text_start:.2f}s")
+
+    keyword_start = time.time()
     logging.info("🔑 Extracting keywords from CV text...")
     keywords = extract_keywords(text, top_n=top_n)
     logging.info(f"✅ Extracted {len(keywords)} keywords")
+    logging.info(f"⏱ Keyword extraction time: {time.time() - keyword_start:.2f}s")
 
-    # Clean up the local file
     try:
         os.remove(local_path)
         logging.info(f"🧹 Temp file deleted: {local_path}")
     except Exception as e:
         logging.warning(f"⚠️ Failed to delete temp CV file: {e}")
+
+    total_time = time.time() - start
+    logging.info(f"🎯 Total CV processing time: {total_time:.2f}s")
 
     return text, keywords
