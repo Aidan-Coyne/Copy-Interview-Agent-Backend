@@ -8,6 +8,9 @@ from transformers import AutoTokenizer
 from keybert import KeyBERT
 from keybert.backend._base import BaseEmbedder
 
+import firebase_admin
+from firebase_admin import credentials, storage
+
 # Persist transformers cache in /tmp across container lifetime
 os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface"
 
@@ -15,18 +18,43 @@ os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ─── Firebase initialization ───────────────────────────────────────────────────
+cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not cred_path or not os.path.isfile(cred_path):
+    raise RuntimeError(
+        "Set the GOOGLE_APPLICATION_CREDENTIALS env var to the path of your service account JSON"
+    )
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(cred_path)
+    firebase_admin.initialize_app(cred, {
+        "storageBucket": "ai-interview-agent-e2f7b.firebasestorage.app"
+    })
+bucket = storage.bucket()
+
+# ─── Ensure local models/ directory exists ──────────────────────────────────────
+HERE        = os.path.dirname(__file__)
+MODELS_DIR  = os.path.join(HERE, "models")
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+REMOTE_ONNX_PATH = "models/paraphrase-MiniLM-L3-v2.onnx"
+LOCAL_ONNX_PATH  = os.path.join(MODELS_DIR, "paraphrase-MiniLM-L3-v2.onnx")
+
+# ─── Download ONNX model from Firebase if missing ────────────────────────────────
+if not os.path.exists(LOCAL_ONNX_PATH):
+    logger.info("Downloading ONNX model from Firebase…")
+    blob = bucket.blob(REMOTE_ONNX_PATH)
+    blob.download_to_filename(LOCAL_ONNX_PATH)
+    logger.info("Download complete.")
+
 # ─── Load tokenizer & ONNX session at startup ──────────────────────────────────
 _model_start = time.time()
 
-# Adjust path to wherever your ONNX file lives in the container
-ONNX_PATH   = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
-# Load tokenizer with correct model ID and optional HF token
-TOKENIZER   = AutoTokenizer.from_pretrained(
+TOKENIZER = AutoTokenizer.from_pretrained(
     "sentence-transformers/paraphrase-MiniLM-L3-v2",
     use_auth_token=os.getenv("HUGGINGFACE_HUB_TOKEN", None)
 )
-# Initialize ONNX runtime session
-SESSION     = rt.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
+SESSION = rt.InferenceSession(LOCAL_ONNX_PATH, providers=["CPUExecutionProvider"])
 
 logger.info(f"Loaded ONNX model in {time.time() - _model_start:.2f}s")
 
@@ -35,14 +63,12 @@ class ONNXEmbedder(BaseEmbedder):
     def __init__(self, session: rt.InferenceSession, tokenizer: AutoTokenizer):
         self.sess      = session
         self.tokenizer = tokenizer
-        # Map ONNX input/output names
         inputs        = {inp.name: inp.name for inp in session.get_inputs()}
         self.input_ids      = inputs.get("input_ids", list(inputs)[0])
         self.attention_mask = inputs.get("attention_mask", list(inputs)[1])
         self.output_name    = session.get_outputs()[0].name
 
     def embed(self, documents: list[str]) -> np.ndarray:
-        # Tokenize + convert to numpy arrays
         enc = self.tokenizer(
             documents,
             return_tensors="np",
@@ -54,7 +80,6 @@ class ONNXEmbedder(BaseEmbedder):
             self.input_ids:      enc["input_ids"],
             self.attention_mask: enc["attention_mask"]
         }
-        # Run ONNX Runtime
         embeddings = self.sess.run([self.output_name], ort_inputs)[0]
         return embeddings
 
@@ -112,7 +137,6 @@ def extract_keywords(
         )
         logger.info(f"Raw KeyBERT candidates: {raw}")
 
-        # Clean & filter
         cleaned = []
         for item in raw:
             kw = item[0] if isinstance(item, tuple) else item
