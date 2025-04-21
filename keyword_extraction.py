@@ -119,7 +119,7 @@ def extract_keywords(
             text,
             keyphrase_ngram_range=(1, 2),
             use_mmr=True,
-            nr_candidates=20,
+            nr_candidates=10,
             top_n=top_n,
             embeddings=embeddings
         )
