@@ -3,11 +3,12 @@
 # 1. Base on a slim Python image
 FROM python:3.12-slim
 
-# 2. Install system deps (incl. ffmpeg)
+# 2. Install system deps (incl. ffmpeg + git for pip git‑installs)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ffmpeg \
-      build-essential && \
+      build-essential \
+      git && \
     rm -rf /var/lib/apt/lists/*
 
 # 3. Set workdir and copy in requirements
