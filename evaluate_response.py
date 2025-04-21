@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 
 nlp = spacy.load("en_core_web_sm")
 
+
 class TranscriptionError(Exception):
     pass
+
 
 def download_user_response_from_firebase(session_id: str, question_index: int, bucket: storage.Bucket) -> bytes:
     blob_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
@@ -39,6 +41,7 @@ def download_user_response_from_firebase(session_id: str, question_index: int, b
     except Exception as e:
         logger.warning(f"Failed to delete temp audio file: {e}")
     return audio_bytes
+
 
 def convert_to_wav(audio_data: bytes) -> bytes:
     input_filename = f"temp_{uuid.uuid4().hex}.webm"
@@ -59,6 +62,7 @@ def convert_to_wav(audio_data: bytes) -> bytes:
             os.remove(output_filename)
     return wav_data
 
+
 def transcribe_audio(audio_data: bytes) -> str:
     recognizer = sr.Recognizer()
     try:
@@ -77,6 +81,7 @@ def transcribe_audio(audio_data: bytes) -> str:
     except Exception as e:
         raise TranscriptionError(f"Error transcribing audio: {e}")
 
+
 def extract_company_keywords(company_info: str) -> List[str]:
     try:
         company_info_list = json.loads(company_info)
@@ -91,9 +96,11 @@ def extract_company_keywords(company_info: str) -> List[str]:
         logger.error(f"Error extracting company keywords: {e}")
         return []
 
+
 def extract_skills_from_response(response_text: str) -> List[str]:
     doc = nlp(response_text)
     return list(set(token.text.lower() for token in doc if token.pos_ in {"NOUN", "VERB"}))
+
 
 def generate_improvement_suggestions(
     response_text: str,
@@ -132,13 +139,14 @@ def generate_improvement_suggestions(
         })
     return suggestions
 
+
 def get_relevant_keywords(
     question_data: Dict[str, Any],
     job_role: str,
     company_name: str,
     company_info: str
 ) -> Tuple[List[str], str, Optional[str]]:
-    # --- your existing two-tuple logic ---
+    # --- existing logic to build keywords + question_type ---
     question_skills    = question_data.get("skills", [])
     question_experience= question_data.get("experience", "")
     question_text      = question_data.get("question_text", "").lower()
@@ -165,7 +173,7 @@ def get_relevant_keywords(
     elif "skills" in question_text or "explain" in question_text:
         question_type = "technical"
 
-    # --- NEW: get sector from company_info ---
+    # --- NEW: extract sector from the same company_info payload ---
     try:
         ci = json.loads(company_info)
         company_sector = extract_sectors(ci)
@@ -174,17 +182,27 @@ def get_relevant_keywords(
 
     return relevant_keywords, question_type, company_sector
 
+
 def score_response(
     response_text: str,
     question_text: str,
     relevant_keywords: List[str],
-    question_type: str
+    question_type: str,
+    company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
-    # ... unchanged ...
+    """
+    Now takes a fifth parameter, company_sector, so your app.py unpacking
+    (expected 3 return values + passing 3 args into score_response) aligns.
+    """
     doc = nlp(response_text)
-    response_tokens = [token.lemma_.lower().strip(string.punctuation)
-                       for token in doc if not token.is_stop and len(token.text) > 2]
-    cleaned_keywords = [kw.lower().strip(string.punctuation) for kw in relevant_keywords if len(kw.strip()) > 2]
+    response_tokens = [
+        token.lemma_.lower().strip(string.punctuation)
+        for token in doc if not token.is_stop and len(token.text) > 2
+    ]
+    cleaned_keywords = [
+        kw.lower().strip(string.punctuation)
+        for kw in relevant_keywords if len(kw.strip()) > 2
+    ]
 
     matched_keywords = []
     missing_keywords = []
@@ -196,22 +214,42 @@ def score_response(
         else:
             missing_keywords.append(kw)
 
-    keyword_score = (len(matched_keywords) / len(cleaned_keywords)) * 100 if cleaned_keywords else 0
+    keyword_score = (
+        len(matched_keywords) / len(cleaned_keywords) * 100
+        if cleaned_keywords else 0
+    )
     question_score = fuzz.partial_ratio(response_text, question_text)
 
     weights = {
         "technical": {"keyword": 0.5, "question": 0.5},
         "behavioral": {"keyword": 0.3, "question": 0.7},
-        "situational":{"keyword": 0.3, "question": 0.7},
+        "situational": {"keyword": 0.3, "question": 0.7},
     }.get(question_type, {"keyword": 0.4, "question": 0.6})
 
-    final_numeric = round((weights["keyword"] * keyword_score) + (weights["question"] * question_score), 2)
+    final_numeric = round(
+        weights["keyword"] * keyword_score +
+        weights["question"] * question_score,
+        2
+    )
     score_out_of_10 = round(final_numeric / 10, 1)
 
     suggestions = generate_improvement_suggestions(
-        response_text, missing_keywords, question_type, cleaned_keywords,
-        score_out_of_10, keyword_score, question_score, weights
+        response_text,
+        missing_keywords,
+        question_type,
+        cleaned_keywords,
+        score_out_of_10,
+        keyword_score,
+        question_score,
+        weights
     )
+
+    # Optional: tie in sector-specific praise
+    if company_sector:
+        suggestions.append({
+            "area": "Sector Fit",
+            "feedback": f"Great—your answer shows awareness of the {company_sector} sector."
+        })
 
     return {
         "score": score_out_of_10,
