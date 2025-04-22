@@ -7,39 +7,55 @@ from typing import List, Dict, Tuple, Any, Optional
 from fastapi import HTTPException
 from io import BytesIO
 import wave
-import subprocess, uuid, os
-import string
-import tempfile
+import subprocess, uuid, os, tempfile, string
 from google.cloud import storage
 
-# NEW import:
+# Optional: install rank-bm25 via pip install rank-bm25
+from rank_bm25 import BM25Okapi
+
+# NEW imports for semantic relevance
+from sentence_transformers import SentenceTransformer, util
+from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 from question_generation import extract_sectors
 
+# Logging setup
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-nlp = spacy.load("en_core_web_sm")
+# Helper rounding function
+def deep_round(value: float, ndigits: int) -> float:
+    """Round a float to a given precision."""
+    return round(value, ndigits)
 
+# Load models once at import time
+envb = os.environ.get
+embedder = SentenceTransformer('all-MiniLM-L6-v2')
+nli = pipeline("text-classification", model="roberta-large-mnli")
+nlp = spacy.load("en_core_web_sm")
 
 class TranscriptionError(Exception):
     pass
 
+# ------------------------------------------------------------------------------------------------
+# Core utility functions
+# ------------------------------------------------------------------------------------------------
 
 def download_user_response_from_firebase(session_id: str, question_index: int, bucket: storage.Bucket) -> bytes:
+    logger.debug(f"Downloading audio for session={session_id}, question_index={question_index}")
     blob_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
     blob = bucket.blob(blob_path)
     if not blob.exists():
-        logger.error(f"Audio response not found in Firebase: {blob_path}")
+        logger.error(f"Audio response not found: {blob_path}")
         raise HTTPException(status_code=404, detail="Audio response not found in storage.")
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
         blob.download_to_filename(temp_file.name)
-        logger.info(f"Downloaded audio response to temp file: {temp_file.name}")
+        logger.debug(f"Downloaded to temp file: {temp_file.name}")
     with open(temp_file.name, "rb") as f:
         audio_bytes = f.read()
     try:
         os.remove(temp_file.name)
     except Exception as e:
-        logger.warning(f"Failed to delete temp audio file: {e}")
+        logger.warning(f"Failed to delete temp file: {e}")
     return audio_bytes
 
 
@@ -49,17 +65,13 @@ def convert_to_wav(audio_data: bytes) -> bytes:
     try:
         with open(input_filename, "wb") as f:
             f.write(audio_data)
-        subprocess.run([
-            "ffmpeg", "-y", "-i", input_filename,
-            "-acodec", "pcm_s16le", output_filename
-        ], check=True)
+        subprocess.run(["ffmpeg", "-y", "-i", input_filename, "-acodec", "pcm_s16le", output_filename], check=True)
         with open(output_filename, "rb") as f:
             wav_data = f.read()
     finally:
-        if os.path.exists(input_filename):
-            os.remove(input_filename)
-        if os.path.exists(output_filename):
-            os.remove(output_filename)
+        for fn in (input_filename, output_filename):
+            if os.path.exists(fn):
+                os.remove(fn)
     return wav_data
 
 
@@ -69,29 +81,28 @@ def transcribe_audio(audio_data: bytes) -> str:
         with wave.open(BytesIO(audio_data), 'rb') as wf:
             sample_rate = wf.getframerate()
             sample_width = wf.getsampwidth()
-            n_channels = wf.getnchannels()
-            logger.info(f"Audio properties: sample_rate={sample_rate}, sample_width={sample_width}, channels={n_channels}")
+            logger.info(f"Audio properties: sample_rate={sample_rate}, sample_width={sample_width}")
         audio_data_sr = sr.AudioData(audio_data, sample_rate=sample_rate, sample_width=sample_width)
         text = recognizer.recognize_google(audio_data_sr)
         return text.lower()
     except sr.UnknownValueError:
-        raise TranscriptionError("Could not understand audio. Please try speaking clearly.")
+        raise TranscriptionError("Could not understand audio. Please speak clearly.")
     except sr.RequestError as e:
-        raise TranscriptionError(f"Speech recognition service error: {e}")
+        raise TranscriptionError(f"Speech recognition error: {e}")
     except Exception as e:
         raise TranscriptionError(f"Error transcribing audio: {e}")
 
 
 def extract_company_keywords(company_info: str) -> List[str]:
     try:
-        company_info_list = json.loads(company_info)
-        company_keywords = []
-        for item in company_info_list:
+        items = json.loads(company_info)
+        kw = []
+        for item in items:
             snippet = item.get("snippet", "").lower()
             doc = nlp(snippet)
-            company_keywords.extend(token.lemma_ for token in doc if token.pos_ in {"NOUN", "VERB"})
-            company_keywords.extend(ent.text.lower() for ent in doc.ents)
-        return list(set(company_keywords))
+            kw.extend(token.lemma_ for token in doc if token.pos_ in {"NOUN","VERB"})
+            kw.extend(ent.text.lower() for ent in doc.ents)
+        return list(set(kw))
     except Exception as e:
         logger.error(f"Error extracting company keywords: {e}")
         return []
@@ -99,7 +110,7 @@ def extract_company_keywords(company_info: str) -> List[str]:
 
 def extract_skills_from_response(response_text: str) -> List[str]:
     doc = nlp(response_text)
-    return list(set(token.text.lower() for token in doc if token.pos_ in {"NOUN", "VERB"}))
+    return list(set(token.text.lower() for token in doc if token.pos_ in {"NOUN","VERB"}))
 
 
 def generate_improvement_suggestions(
@@ -112,31 +123,29 @@ def generate_improvement_suggestions(
     question_score: float,
     weights: Dict[str, float]
 ) -> List[Dict[str, str]]:
-    suggestions = []
+    suggestions: List[Dict[str, str]] = []
     suggestions.append({
         "area": "Scoring Explanation",
         "feedback": (
-            f"Your final score is {final_score} out of 10. This was calculated using: "
-            f"(Keyword Score: {keyword_score:.1f}% * {weights.get('keyword', 0)} + "
-            f"Question Relevance Score: {question_score:.1f} * {weights.get('question', 0)}) = {final_score * 10:.1f}% overall."
+            f"Your final score is {final_score} out of 10. Calculated as: "
+            f"(Keyword: {keyword_score:.1f}% * {weights.get('keyword',0)}) + "
+            f"(Question: {question_score:.1f}% * {weights.get('question',0)}) = "
+            f"{(keyword_score*weights.get('keyword',0)+question_score*weights.get('question',0)):.1f}%"
         )
     })
     if missing_keywords:
         suggestions.append({
             "area": "Keyword Usage",
-            "feedback": f"Consider including these missing keywords: {', '.join(missing_keywords)}."
+            "feedback": f"Consider adding missing keywords: {', '.join(missing_keywords)}"
         })
     if question_type == "behavioral":
-        suggestions.append({"area": "Behavioral Structure", "feedback": "Use the STAR method (Situation, Task, Action, Result)."})
+        suggestions.append({"area":"Behavioral Structure","feedback":"Use the STAR method."})
     elif question_type == "situational":
-        suggestions.append({"area": "Situational Strategy", "feedback": "Explain your reasoning and problem-solving steps."})
+        suggestions.append({"area":"Situational Strategy","feedback":"Outline step-by-step reasoning."})
     elif question_type == "technical":
-        suggestions.append({"area": "Technical Depth", "feedback": "Add specific tools, processes, or examples where possible."})
+        suggestions.append({"area":"Technical Depth","feedback":"Include specific tools/examples."})
     if len(response_text.split()) < 20:
-        suggestions.append({
-            "area": "Detail & Depth",
-            "feedback": "Try expanding your answer with more examples or explanations."
-        })
+        suggestions.append({"area":"Detail & Depth","feedback":"Expand with more examples."})
     return suggestions
 
 
@@ -146,116 +155,130 @@ def get_relevant_keywords(
     company_name: str,
     company_info: str
 ) -> Tuple[List[str], str, Optional[str]]:
-    # --- existing logic to build keywords + question_type ---
-    question_skills    = question_data.get("skills", [])
-    question_experience= question_data.get("experience", "")
-    question_text      = question_data.get("question_text", "").lower()
-
-    company_keywords   = extract_company_keywords(company_info)
-    job_role_lemma     = nlp(job_role)[0].lemma_ if job_role else ""
-    company_name_lemma = nlp(company_name)[0].lemma_ if company_name else ""
-    exp_doc            = nlp(question_experience)
-    exp_lemma          = exp_doc[0].lemma_ if exp_doc else ""
-
-    all_keywords = set(
-        [nlp(skill)[0].lemma_.lower() for skill in question_skills if skill] +
-        ([exp_lemma.lower()] if exp_lemma else []) +
-        company_keywords +
-        [job_role_lemma.lower(), company_name_lemma.lower()]
-    )
-    relevant_keywords = list(all_keywords)
-
+    q_skills = question_data.get("skills", [])
+    q_exp = question_data.get("experience", "")
+    q_text = question_data.get("question_text", "").lower()
+    comp_kw = extract_company_keywords(company_info)
+    role_lemma = nlp(job_role)[0].lemma_ if job_role else ""
+    name_lemma = nlp(company_name)[0].lemma_ if company_name else ""
+    exp_lemma = nlp(q_exp)[0].lemma_ if q_exp else ""
+    all_kw = set([nlp(s)[0].lemma_.lower() for s in q_skills]+([exp_lemma] if exp_lemma else[])+comp_kw+[role_lemma,name_lemma])
     question_type = "general"
-    if "tell me about a time" in question_text or "describe a situation" in question_text:
+    if any(k in q_text for k in ["tell me about a time","describe a situation"]):
         question_type = "behavioral"
-    elif "how would you" in question_text:
+    elif "how would you" in q_text:
         question_type = "situational"
-    elif "skills" in question_text or "explain" in question_text:
+    elif any(k in q_text for k in ["skills","explain"]):
         question_type = "technical"
-
-    # --- NEW: extract sector from the same company_info payload ---
     try:
-        ci = json.loads(company_info)
-        company_sector = extract_sectors(ci)
+        sector = extract_sectors(json.loads(company_info))
     except Exception:
-        company_sector = None
+        sector = None
+    return list(all_kw), question_type, sector
 
-    return relevant_keywords, question_type, company_sector
+# ------------------------------------------------------------------------------------------------
+# Relevance model functions
+# ------------------------------------------------------------------------------------------------
 
+def semantic_similarity(q: str, r: str) -> float:
+    q_emb = embedder.encode(q, convert_to_tensor=True)
+    r_emb = embedder.encode(r, convert_to_tensor=True)
+    score = (util.cos_sim(q_emb, r_emb).item() + 1) / 2 * 100
+    logger.debug(f"Semantic similarity: {score:.2f}")
+    return score
+
+
+def entailment_score(question: str, response: str) -> float:
+    out = nli(f"{question} </s></s> {response}")
+    ent = next((x for x in out if x['label']=='ENTAILMENT'), None)
+    score = ent['score']*100 if ent else 0
+    logger.debug(f"Entailment score: {score:.2f}")
+    return score
+
+
+def tfidf_bm25_score(question: str, response: str) -> float:
+    q_tok = question.lower().split()
+    r_tok = response.lower().split()
+    bm25 = BM25Okapi([r_tok])
+    sc = bm25.get_scores(q_tok)[0] if bm25.get_scores(q_tok) else 0
+    score = min(max(sc,0),1)*100
+    logger.debug(f"BM25 score: {score:.2f}")
+    return score
+
+
+def slot_match_score(question: str, response: str) -> float:
+    qd, rd = nlp(question), nlp(response)
+    slots = [t for t in qd if t.dep_ in ("ROOT","dobj")]
+    if not slots:
+        return 0.0
+    matches = sum(1 for s in slots for t in rd if t.lemma_==s.lemma_)
+    score = matches/len(slots)*100
+    logger.debug(f"Slot match: {score:.2f} ({matches}/{len(slots)})")
+    return score
+
+# ------------------------------------------------------------------------------------------------
+# Main scoring function
+# ------------------------------------------------------------------------------------------------
 
 def score_response(
     response_text: str,
     question_text: str,
     relevant_keywords: List[str],
     question_type: str,
-    company_sector: Optional[str] = None
+    company_sector: Optional[str]=None
 ) -> Dict[str, Any]:
-    """
-    Now takes a fifth parameter, company_sector, so your app.py unpacking
-    (expected 3 return values + passing 3 args into score_response) aligns.
-    """
+    logger.debug("--- score_response start ---")
+    logger.debug(f"Question: {question_text}")
+    logger.debug(f"Response: {response_text}")
+
+    # Keyword fuzzy match
     doc = nlp(response_text)
-    response_tokens = [
-        token.lemma_.lower().strip(string.punctuation)
-        for token in doc if not token.is_stop and len(token.text) > 2
-    ]
-    cleaned_keywords = [
-        kw.lower().strip(string.punctuation)
-        for kw in relevant_keywords if len(kw.strip()) > 2
-    ]
+    tokens = [t.lemma_.lower().strip(string.punctuation) for t in doc if not t.is_stop and len(t)>2]
+    kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
+    matched, missing = [], []
+    for kw in kws:
+        pct = max(fuzz.partial_ratio(kw, tok) for tok in tokens)
+        (matched if pct>=80 else missing).append(kw)
+    keyword_score = len(matched)/len(kws)*100 if kws else 0
+    logger.debug(f"Keyword score: {keyword_score:.2f}")
 
-    matched_keywords = []
-    missing_keywords = []
-    threshold = 80
-    for kw in cleaned_keywords:
-        best_ratio = max(fuzz.partial_ratio(kw, token) for token in response_tokens)
-        if best_ratio >= threshold:
-            matched_keywords.append(kw)
-        else:
-            missing_keywords.append(kw)
+    # Relevance sub-scores
+    sem = semantic_similarity(question_text, response_text)
+    ent = entailment_score(question_text, response_text)
+    tfidf = tfidf_bm25_score(question_text, response_text)
+    slot = slot_match_score(question_text, response_text)
 
-    keyword_score = (
-        len(matched_keywords) / len(cleaned_keywords) * 100
-        if cleaned_keywords else 0
-    )
-    question_score = fuzz.partial_ratio(response_text, question_text)
+    rel_weights = {"semantic":0.4,"entailment":0.3,"tfidf":0.15,"slot":0.15}
+    question_score = sem*rel_weights['semantic']+ent*rel_weights['entailment']+tfidf*rel_weights['tfidf']+slot*rel_weights['slot']
+    logger.debug(f"Question relev. score: {question_score:.2f}")
 
-    weights = {
-        "technical": {"keyword": 0.5, "question": 0.5},
-        "behavioral": {"keyword": 0.3, "question": 0.7},
-        "situational": {"keyword": 0.3, "question": 0.7},
-    }.get(question_type, {"keyword": 0.4, "question": 0.6})
+    base_w = {"technical":(0.5,0.5),"behavioral":(0.3,0.7),"situational":(0.3,0.7)}
+    kw_w, qt_w = base_w.get(question_type,(0.4,0.6))
+    final_num = deep_round(kw_w*keyword_score + qt_w*question_score,2)
+    score10 = round(final_num/10,1)
+    logger.debug(f"Final score: {final_num:.2f} -> {score10}/10")
 
-    final_numeric = round(
-        weights["keyword"] * keyword_score +
-        weights["question"] * question_score,
-        2
-    )
-    score_out_of_10 = round(final_numeric / 10, 1)
-
-    suggestions = generate_improvement_suggestions(
-        response_text,
-        missing_keywords,
-        question_type,
-        cleaned_keywords,
-        score_out_of_10,
-        keyword_score,
-        question_score,
-        weights
-    )
-
-    # Optional: tie in sector-specific praise
+    suggestions = generate_improvement_suggestions(response_text, missing, question_type, kws, score10, keyword_score, question_score, {"keyword":kw_w,"question":qt_w})
     if company_sector:
-        suggestions.append({
-            "area": "Sector Fit",
-            "feedback": f"Great—your answer shows awareness of the {company_sector} sector."
-        })
+        suggestions.append({"area":"Sector Fit","feedback":f"Your answer shows awareness of the {company_sector} sector."})
 
-    return {
-        "score": score_out_of_10,
-        "keyword_matches": matched_keywords,
-        "expected_keywords": cleaned_keywords,
+    result = {
+        "score": score10,
+        "keyword_matches": matched,
+        "expected_keywords": kws,
         "skills_shown": extract_skills_from_response(response_text),
+        "relevance_breakdown": {"semantic":sem,"entailment":ent,"tfidf":tfidf,"slot":slot},
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }
+    logger.debug(f"--- score_response end: {result} ---")
+    return result
+
+# ------------------------------------------------------------------------------------------------
+# Debug runner
+# ------------------------------------------------------------------------------------------------
+if __name__ == "__main__":
+    test_q = "Tell me about a time you led a team successfully."
+    test_r = "I led five engineers, improved throughput by 20%, and delivered on time."
+    kws, qtype, sec = get_relevant_keywords({"skills":["leadership"]},"PM","Acme","[]")
+    import pprint; pprint.pprint(score_response(test_r, test_q, kws, qtype, sec))
