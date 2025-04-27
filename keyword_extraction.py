@@ -18,7 +18,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ─── Firebase initialization ───────────────────────────────────────────────────
-# Expect your service‑account JSON (the same one your app.py uses) in this env var:
 creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", None)
 if not creds_json:
     raise RuntimeError("Set GOOGLE_APPLICATION_CREDENTIALS_JSON to your service account JSON")
@@ -48,13 +47,11 @@ if not os.path.exists(LOCAL_ONNX_PATH):
 
 # ─── Load tokenizer & ONNX session at startup ──────────────────────────────────
 _model_start = time.time()
-
 TOKENIZER = AutoTokenizer.from_pretrained(
     "sentence-transformers/paraphrase-MiniLM-L3-v2",
     use_auth_token=os.getenv("HUGGINGFACE_HUB_TOKEN", None)
 )
 SESSION = rt.InferenceSession(LOCAL_ONNX_PATH, providers=["CPUExecutionProvider"])
-
 logger.info(f"Loaded ONNX model in {time.time() - _model_start:.2f}s")
 
 # ─── ONNX embedder for KeyBERT ──────────────────────────────────────────────────
@@ -86,7 +83,7 @@ class ONNXEmbedder(BaseEmbedder):
 onnx_embedder = ONNXEmbedder(SESSION, TOKENIZER)
 kw_model      = KeyBERT(model=onnx_embedder)
 
-# ─── Noise‑word filtering ───────────────────────────────────────────────────────
+# ─── Noise-word filtering ───────────────────────────────────────────────────────
 STOPWORDS = {
     "linkedin", "profile", "cv", "resume", "email", "phone", "contact",
     "january", "february", "march", "april", "may", "june", "july",
@@ -109,14 +106,25 @@ def extract_keywords(
     min_len: int  = 3,
     embeddings: np.ndarray | None = None
 ) -> list[str]:
-    if not text or len(text) < 50:
+    # Allow passing a JSON list of dicts [{"snippet": "..."}]
+    try:
+        data = json.loads(text)
+        if isinstance(data, list) and data and isinstance(data[0], dict) and "snippet" in data[0]:
+            # Concatenate all snippet fields
+            text_input = " ".join(item["snippet"] for item in data if isinstance(item.get("snippet"), str))
+        else:
+            text_input = text
+    except json.JSONDecodeError:
+        text_input = text
+
+    if not text_input or len(text_input) < 50:
         logger.warning("Input text too short for reliable extraction.")
         return []
 
     start = time.time()
     try:
         raw = kw_model.extract_keywords(
-            text,
+            text_input,
             keyphrase_ngram_range=(1, 2),
             use_mmr=True,
             nr_candidates=10,
