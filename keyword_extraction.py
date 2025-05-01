@@ -105,13 +105,18 @@ def extract_keywords(
     top_n: int   = 10,
     min_len: int = 3
 ) -> list[str]:
-    # Allow passing a JSON list of dicts [{"snippet": "..."}]
+    # If the input is a JSON list of dicts with "snippet" keys, concatenate them:
     try:
         data = json.loads(text)
-        if isinstance(data, list) and data and isinstance(data[0], dict) and "snippet" in data[0]:
-            # Concatenate all snippet fields
+        if (
+            isinstance(data, list) and
+            data and
+            isinstance(data[0], dict) and
+            "snippet" in data[0]
+        ):
             text_input = " ".join(
-                item["snippet"] for item in data
+                item["snippet"]
+                for item in data
                 if isinstance(item.get("snippet"), str)
             )
         else:
@@ -125,21 +130,21 @@ def extract_keywords(
 
     start = time.time()
     try:
+        # NOTE: no embeddings=… argument here
         raw = kw_model.extract_keywords(
             text_input,
             keyphrase_ngram_range=(1, 2),
-            use_mmr=True,        # set False to skip reranking if speed is critical
-            nr_candidates=10,    # lower for fewer candidate phrases
+            use_mmr=True,
+            nr_candidates=10,
             top_n=top_n
         )
         logger.info(f"Raw KeyBERT candidates: {raw}")
 
-        cleaned = [
-            (item[0] if isinstance(item, tuple) else item)
-            for item in raw
-            if (len((item[0] if isinstance(item, tuple) else item)) >= min_len)
-            and clean_keyword((item[0] if isinstance(item, tuple) else item))
-        ]
+        cleaned = []
+        for item in raw:
+            kw = item[0] if isinstance(item, tuple) else item
+            if len(kw) >= min_len and clean_keyword(kw):
+                cleaned.append(kw)
 
         logger.info(f"Extracted & cleaned keywords: {cleaned}")
         logger.info(f"⏱ Keyword extraction took {time.time() - start:.2f}s")
