@@ -179,69 +179,67 @@ def get_tier(score: float) -> str:
     return "strong"
 
 TEMPLATES = {
-    "Semantic Alignment": {
+    "Topic Fit": {
         "needs_improvement": [
-            "Let’s zero in on the question’s key verb—start by restating it up front to show alignment.",
-            "Mirror the prompt’s wording to anchor your answer in its intent."
+            "Let’s zero in on the question’s main topic—start by restating it to show alignment.",
+            "Make sure your overall idea mirrors what the prompt is asking for."
         ],
         "on_track": [
-            "You mentioned the right action—lead with that verb to make it pop even more.",
-            "Good echo of the prompt—tightening your phrasing will make it clearer."
+            "Good overall match—tightening your phrasing will make it pop even more.",
+            "You’ve got the topic right; lead with it to make it crystal clear."
         ],
         "strong": [
-            "Great use of the question’s language! You could sprinkle in a synonym to show range.",
-            "Solid match to the prompt—rephrase it right at the start for extra polish."
+            "Great topic alignment! You could add an example to drive it home.",
+            "Strong fit—try phrasing it as a one-sentence summary up front for extra polish."
         ]
     },
-    "Answer Focus": {
+    "Clear Answer": {
         "needs_improvement": [
-            "Start with a one-sentence summary of your approach to focus your answer.",
-            "Open with your main takeaway—it sets the stage for your examples."
+            "Start with a one-sentence summary to make your answer crystal clear.",
+            "Kick off with ‘I would…’ so the reviewer immediately knows your approach."
         ],
         "on_track": [
-            "Nice structure—consider summarizing your main point in the very first line.",
-            "A brief TL;DR intro will sharpen your message."
+            "Nice structure—consider moving your summary to the very first line.",
+            "Good clarity—opening with a TL;DR will sharpen your message."
         ],
         "strong": [
-            "Your focus is clear! Adding an “I would…” opener could make it even crisper.",
+            "Your answer is clear! You could add a quick example to illustrate it.",
             "Excellent clarity—lead with a bold statement of your plan for extra impact."
         ]
     },
-    "Keyword Inclusion": {
+    "Question Terms Used": {
         "needs_improvement": [
-            "Weave in more of the prompt’s keywords so your relevance really stands out.",
-            "Try adding those missing terms naturally—they’ll boost your score."
+            "Weave in more of the exact words from the question to highlight relevance.",
+            "Try sprinkling in the prompt’s keywords naturally—they’ll boost your fit."
         ],
         "on_track": [
             "Good use of key terms—see if you can sprinkle in a couple more for extra impact.",
             "You’ve hit most keywords; including one or two more will strengthen it."
         ],
         "strong": [
-            "Great keyword coverage! Vary the order for style.",
-            "Solid matching—alternating synonyms can show versatility."
+            "Great keyword coverage! Try swapping in a synonym to show range.",
+            "Solid matching—alternating synonyms can show your vocabulary."
         ]
     },
-    "Slot Coverage": {
+    "Question Action & Object Answered": {
         "needs_improvement": [
-            "Mention the main action and object from the prompt to cover all bases.",
-            "Name the “who does what” right away (e.g. “I would deal with a difficult colleague by…”)."
+            "Name the verb (action) and the thing you’re acting on in your first sentence.",
+            "Cover both parts: what you’d do, and who/what you’d do it to."
         ],
         "on_track": [
-            "You referenced the action—bringing it forward in your opening will elevate it.",
-            "Nice slot match—adding the object (“colleague”) in the same breath will seal it."
+            "You mentioned both parts—bringing them up front will elevate it.",
+            "Nice coverage—leading with ‘I would [action] the [object]…’ is even stronger."
         ],
         "strong": [
-            "Solid slot coverage! Leading with the exact phrase from the question is super polished.",
-            "Excellent mention of both action and object—consider varying phrasing for style."
+            "Excellent coverage of action & object—try varying phrasing next time.",
+            "Solid slot match—consider swapping order for variety."
         ]
     }
-    # Add more areas as needed...
 }
 
 def pick_feedback(area: str, score: float) -> str:
     tier = get_tier(score)
     return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
-
 
 # --------------------------------------------------
 # Main scoring function
@@ -290,17 +288,22 @@ def score_response(
     })
     suggestions.append({
         "area": "Relevance Breakdown",
-        "feedback": f"Semantic: {sem:.1f}%, Entailment: {ent:.1f}%, BM25: {tfidf:.1f}%, Slot: {slot:.1f}%."
+        "feedback": (
+            f"Topic Fit: {sem:.1f}%  •  "
+            f"Clear Answer: {ent:.1f}%  •  "
+            f"Question Terms Used: {tfidf:.1f}%  •  "
+            f"Question Action & Object Answered: {slot:.1f}%"
+        )
     })
 
     if sem < 70:
-        suggestions.append({"area": "Semantic Alignment", "feedback": pick_feedback("Semantic Alignment", sem)})
+        suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
     if ent < 70:
-        suggestions.append({"area": "Answer Focus",        "feedback": pick_feedback("Answer Focus", ent)})
+        suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", ent)})
     if tfidf < 70:
-        suggestions.append({"area": "Keyword Inclusion",   "feedback": pick_feedback("Keyword Inclusion", tfidf)})
+        suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", tfidf)})
     if slot < 70:
-        suggestions.append({"area": "Slot Coverage",       "feedback": pick_feedback("Slot Coverage", slot)})
+        suggestions.append({"area": "Question Action & Object Answered", "feedback": pick_feedback("Question Action & Object Answered", slot)})
 
     if missing:
         suggestions.append({
@@ -313,7 +316,7 @@ def score_response(
     elif question_type == "situational":
         suggestions.append({"area":"Situational Strategy","feedback":"Outline your reasoning steps clearly."})
     elif question_type == "technical":
-        suggestions.append({"area":"Technical Depth",     "feedback":"Include specific tools or examples."})
+        suggestions.append({"area":"Technical Depth","feedback":"Include specific tools or examples."})
 
     if len(response_text.split()) < 20:
         suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})

@@ -3,8 +3,8 @@ import os
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import process_cv
 import search_company
@@ -15,7 +15,6 @@ import logging
 import json
 import tempfile
 from typing import Dict
-from fastapi.middleware.cors import CORSMiddleware
 
 # Import ONNX embedder for caching CV embeddings
 from keyword_extraction import onnx_embedder
@@ -24,8 +23,26 @@ from keyword_extraction import onnx_embedder
 import firebase_admin
 from firebase_admin import credentials, storage
 
-print("🔥 FastAPI app starting...")
+print("🔥 FastAPI app starting…")
 app = FastAPI()
+
+# ─── Handle FastAPI HTTPExceptions so detail is returned ─────────────────────────
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logging.error(f"HTTP error: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "Request error", "detail": exc.detail},
+    )
+
+# ─── Catch-all for any other Exception ──────────────────────────────────────────
+@app.exception_handler(Exception)
+async def all_exception_handler(request: Request, exc: Exception):
+    logging.exception("Unhandled error")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc)},
+    )
 
 # ✅ CORS
 app.add_middleware(
@@ -69,7 +86,6 @@ session_data: Dict[str, Dict] = {}
 def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: str) -> str:
     if not firebase_bucket:
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
-
     blob = firebase_bucket.blob(path)
     try:
         if isinstance(file_or_bytes, bytes):
@@ -78,8 +94,8 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
             raise HTTPException(status_code=500, detail="Unsupported file type for Firebase upload.")
     except Exception as e:
         logger.error(f"🔥 Firebase upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Error uploading file to Firebase.")
-
+        # wrap any underlying error
+        raise HTTPException(status_code=500, detail=str(e))
     blob.make_public()
     return blob.public_url
 
@@ -97,66 +113,62 @@ async def upload_cv(
     session_id = f"{company_name}_{job_role}_{file.filename}"
     logger.info(f"Received upload_cv request for session: {session_id}")
 
-    try:
-        if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
-            raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
+    # Any HTTPException or other Exception will now be handled
+    # by our exception handlers above.
+    if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
+        raise HTTPException(status_code=400,
+                            detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
-        # Upload CV to Firebase
-        cv_path = f"sessions/{session_id}/cv/{file.filename}"
-        file_bytes = await file.read()
-        cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
-        logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
+    # Upload CV to Firebase
+    cv_path = f"sessions/{session_id}/cv/{file.filename}"
+    file_bytes = await file.read()
+    cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
+    logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
-        # Extract CV text
-        cv_text, _ = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
-        if not cv_text.strip():
-            raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
+    # Extract CV text
+    cv_text, _ = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
+    if not cv_text.strip():
+        raise HTTPException(status_code=400,
+                            detail="CV text extraction failed or CV is empty.")
 
-        # Precompute and cache CV embeddings (ONNX)
-        cv_embeddings = onnx_embedder.embed([cv_text])
-        session_data[session_id] = {
-            "cv_text": cv_text,
-            "cv_embeddings": cv_embeddings,
-        }
+    # Precompute and cache CV embeddings (ONNX)
+    cv_embeddings = onnx_embedder.embed([cv_text])
+    session_data[session_id] = {
+        "cv_text": cv_text,
+        "cv_embeddings": cv_embeddings,
+    }
 
-        # Fetch company info
-        company_info = search_company.search_company_info(company_name, job_role)
-        company_info_json = json.loads(company_info)
+    # Fetch company info
+    company_info = search_company.search_company_info(company_name, job_role)
+    company_info_json = json.loads(company_info)
 
-        # Generate questions and upload audio (pass cached embeddings)
-        questions_data = question_generation.generate_questions(
-            cv_text=cv_text,
-            company_info=company_info_json,
-            job_role=job_role,
-            company_name=company_name,
-            selected_question_type=question_type,
-            firebase_bucket=bucket,
-            session_id=session_id,
-            cv_embeddings=cv_embeddings  # use precomputed embeddings
-        )
+    # Generate questions and upload audio
+    questions_data = question_generation.generate_questions(
+        cv_text=cv_text,
+        company_info=company_info_json,
+        job_role=job_role,
+        company_name=company_name,
+        selected_question_type=question_type,
+        firebase_bucket=bucket,
+        session_id=session_id,
+        cv_embeddings=cv_embeddings
+    )
 
-        # Store rest of session data
-        session_data[session_id].update({
-            "company_info": company_info_json,
-            "questions": questions_data,
-            "job_role": job_role,
-            "company_name": company_name
-        })
+    # Store rest of session data
+    session_data[session_id].update({
+        "company_info": company_info_json,
+        "questions": questions_data,
+        "job_role": job_role,
+        "company_name": company_name
+    })
 
-        return {
-            "session_id": session_id,
-            "cv_text": cv_text,
-            "company_info": company_info_json,
-            "questions_data": questions_data,
-            "cv_url": cv_public_url
-        }
-
-    except HTTPException as http_exception:
-        logger.error(f"HTTP Exception: {http_exception.detail}")
-        raise http_exception
-    except Exception as e:
-        logger.exception("Unexpected error in upload_cv endpoint.")
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+    return {
+        "session_id": session_id,
+        "cv_text": cv_text,
+        "company_info": company_info_json,
+        "questions_data": questions_data,
+        "cv_url": cv_public_url
+    }
 
 @app.post("/evaluate_response/")
 async def evaluate_audio_response(
@@ -164,56 +176,49 @@ async def evaluate_audio_response(
     question_index: int = Form(...),
     session_id: str = Form(...)
 ):
-    try:
-        if session_id not in session_data:
-            raise HTTPException(status_code=400, detail="Session not found. Please generate questions first.")
+    if session_id not in session_data:
+        raise HTTPException(status_code=400,
+                            detail="Session not found. Please generate questions first.")
 
-        session = session_data[session_id]
-        questions = session.get("questions", [])
-        if question_index >= len(questions):
-            raise HTTPException(status_code=400, detail="Invalid question index.")
+    session = session_data[session_id]
+    questions = session.get("questions", [])
+    if question_index >= len(questions):
+        raise HTTPException(status_code=400, detail="Invalid question index.")
 
-        question_data = questions[question_index]
-        audio_data = await audio_file.read()
+    question_data = questions[question_index]
+    audio_data    = await audio_file.read()
 
-        # Upload response audio
-        response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
-        response_url = upload_to_firebase(audio_data, bucket, response_path, "audio/mpeg")
+    # Upload response audio
+    response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
+    response_url  = upload_to_firebase(audio_data, bucket, response_path, "audio/mpeg")
 
-        # Convert & transcribe
-        wav_data = evaluate_response.convert_to_wav(audio_data)
-        response_text = evaluate_response.transcribe_audio(wav_data)
+    # Convert & transcribe
+    wav_data      = evaluate_response.convert_to_wav(audio_data)
+    response_text = evaluate_response.transcribe_audio(wav_data)
 
-        # Score response
-        relevant_keywords, question_type, company_sector = \
-            evaluate_response.get_relevant_keywords(
-                question_data,
-                session["job_role"],
-                session["company_name"],
-                json.dumps(session["company_info"])
-            )
-
-        result = evaluate_response.score_response(
-            response_text,
-            question_data["question_text"],
-            relevant_keywords,
-            question_type,
-            company_sector
+    # Score response
+    relevant_keywords, question_type, company_sector = \
+        evaluate_response.get_relevant_keywords(
+            question_data,
+            session["job_role"],
+            session["company_name"],
+            json.dumps(session["company_info"])
         )
+    result = evaluate_response.score_response(
+        response_text,
+        question_data["question_text"],
+        relevant_keywords,
+        question_type,
+        company_sector
+    )
 
-        return JSONResponse(content={
+    return JSONResponse(
+        content={
             "feedback": result,
             "transcribed_text": response_text,
             "response_audio_url": response_url
-        })
-
-    except evaluate_response.TranscriptionError as e:
-        raise HTTPException(status_code=400, detail=f"Audio transcription failed: {e}")
-    except HTTPException as http_exception:
-        raise http_exception
-    except Exception as e:
-        logger.exception("Unexpected error in evaluate_response endpoint.")
-        raise HTTPException(status_code=500, detail="An error occurred while evaluating the response.")
+        }
+    )
 
 @app.post("/end_session/{session_id}")
 def end_session(session_id: str):
