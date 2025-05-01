@@ -8,7 +8,7 @@ from google.cloud import texttospeech
 from google.oauth2 import service_account
 from job_role_library import job_role_library
 from sector_library import sector_library
-from keyword_extraction import extract_keywords  # ONNX‑backed extractor
+from keyword_extraction import extract_keywords  # ONNX-backed extractor
 from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +55,7 @@ def generate_questions(
     selected_question_type: str = "mixed",
     firebase_bucket=None,
     session_id: str = None,
-    cv_embeddings: any = None  # New param for precomputed embeddings
+    cv_embeddings: any = None  # still accepted but no longer passed to extract_keywords()
 ) -> list[dict]:
     """
     Generate interview questions (text + audio) based on CV, company info, and cached embeddings.
@@ -71,11 +71,11 @@ def generate_questions(
         relevant_skills = random.sample(generic_skill_phrases, 2)
     relevant_experience = relevant_experience or "your field"
 
-    # 2) CV keywords using ONNX embedder + cached embeddings
-    cv_keywords = extract_keywords(cv_text, top_n=10, embeddings=cv_embeddings)
+    # 2) CV keywords using ONNX extractor
+    cv_keywords = extract_keywords(cv_text, top_n=10)
     selected_cv_keywords = random.sample(cv_keywords, min(3, len(cv_keywords))) if cv_keywords else []
 
-    # Build CV‑insight questions
+    # Build CV-insight questions
     cv_insight_questions = []
     for idx, kw in enumerate(selected_cv_keywords[:3]):
         cv_insight_questions.append((
@@ -171,11 +171,12 @@ def generate_questions(
             logging.info(f"Uploaded question {i+1} to Firebase: {url}")
 
             question_data.append({
-                "question_text": text,
-                "audio_file": url,
-                "skills": relevant_skills,
-                "experience": relevant_experience,
-                "question_type": q_type
+                "question_text":   text,
+                "audio_file":      url,
+                "skills":          relevant_skills,
+                "experience":      relevant_experience,
+                "sector":          company_sectors,
+                "question_type":   q_type
             })
         except Exception as e:
             logging.error(f"Error generating audio for question {i+1}: {e}")
@@ -185,8 +186,8 @@ def generate_questions(
 def extract_relevant_skills_from_role(job_role: str):
     job_role_lower = job_role.lower()
     for discipline, roles in job_role_library.items():
-        if discipline.lower() in job_role_lower and "keywords" in roles:
-            return random.sample(roles["keywords"], min(2, len(roles["keywords"])))
+        if discipline.lower() in job_role_lower and "_keywords" in roles:
+            return random.sample(roles["_keywords"], min(2, len(roles["_keywords"])))
         for role_title, keywords in roles.items():
             if role_title.lower() in job_role_lower and isinstance(keywords, list):
                 return random.sample(keywords, min(2, len(keywords)))
