@@ -64,7 +64,12 @@ class ONNXEmbedder(BaseEmbedder):
         self.attention_mask = inputs.get("attention_mask", list(inputs)[1])
         self.output_name    = session.get_outputs()[0].name
 
-    def embed(self, documents: list[str]) -> np.ndarray:
+    def embed(self, documents: list[str] | np.ndarray) -> np.ndarray:
+        # If KeyBERT is passing in precomputed embeddings, just return them
+        if isinstance(documents, np.ndarray):
+            return documents
+
+        # Otherwise tokenize and run through ONNX
         enc = self.tokenizer(
             documents,
             return_tensors="np",
@@ -105,14 +110,12 @@ def extract_keywords(
     top_n: int   = 10,
     min_len: int = 3
 ) -> list[str]:
-    # If the input is a JSON list of dicts with "snippet" keys, concatenate them:
+    # If the input is a JSON list of dicts with "snippet" keys, concatenate them
     try:
         data = json.loads(text)
         if (
-            isinstance(data, list) and
-            data and
-            isinstance(data[0], dict) and
-            "snippet" in data[0]
+            isinstance(data, list) and data and
+            isinstance(data[0], dict) and "snippet" in data[0]
         ):
             text_input = " ".join(
                 item["snippet"]
@@ -130,7 +133,6 @@ def extract_keywords(
 
     start = time.time()
     try:
-        # NOTE: no embeddings=… argument here
         raw = kw_model.extract_keywords(
             text_input,
             keyphrase_ngram_range=(1, 2),
