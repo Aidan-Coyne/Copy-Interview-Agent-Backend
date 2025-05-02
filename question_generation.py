@@ -94,7 +94,27 @@ def generate_questions(
         ("technical", "How do you stay updated with the latest advancements in your field?"),
         ("technical", "Explain a complex concept you recently learned and how it impacted your work."),
         ("technical", "What strategies do you use to ensure accuracy and quality?"),
-        ("technical", "Can you provide an example of how you innovated to solve a persistent problem?")
+        ("technical", "Can you provide an example of how you innovated to solve a persistent problem?"),
+        ("technical", "Tell me more about a technical achievement listed on your CV."),
+        ("technical", "Can you elaborate on your role in the most recent project on your CV?"),
+        ("technical", "What specific contributions did you make to the project at {last_company}?"),
+        ("technical", "Which skill listed on your CV are you most confident in, and why?"),
+        ("technical", "What’s a technical challenge you described in your CV and how did you address it?"),
+        ("technical", "Looking at your CV, which project best shows your ability to work independently?"),
+        ("technical", "Which project on your CV best showcases your technical strengths?"),
+        ("technical", "Can you walk me through a problem you solved that’s listed on your CV?"),        
+        ("technical", "How do you approach debugging complex issues?"),
+        ("technical", "Describe your process for testing new features."),
+        ("technical", "What tools do you use for version control and why?"),
+        ("technical", "How do you manage technical debt in projects?"),
+        ("technical", "Have you ever optimized a slow system? How did you do it?"),
+        ("technical", "How do you ensure your work is secure?"),
+        ("technical", "Can you walk me through your deployment process?"),
+        ("technical", "What’s your experience with automation or CI/CD pipelines?"),
+        ("technical", "How do you prioritize bugs and feature requests?"),
+        ("technical", "Describe a time when you had to quickly learn a new technology."),
+        ("technical", "How do you collaborate with non-technical team members?"),
+        ("technical", "What metrics do you use to measure software performance?")
     ]
 
     behavioral_questions = [
@@ -114,8 +134,28 @@ def generate_questions(
         ("behavioral", "Describe a time when you managed tight deadlines while maintaining high quality."),
         ("behavioral", "How do you typically handle feedback from supervisors or clients?"),
         ("behavioral", "Share an example of when you went above and beyond your job responsibilities."),
-        ("behavioral", "How do you manage work-life balance when you're under pressure?")
-    ]
+        ("behavioral", "How do you manage work-life balance when you're under pressure?"),
+        ("behavioral", "Describe a time when you had to handle a difficult stakeholder or client. How did you manage the relationship?"),
+        ("behavioral", "Tell me about a situation where you had to make a decision with incomplete information."),
+        ("behavioral", "Have you ever had to give constructive feedback to a colleague? How did you approach it?"),
+        ("behavioral", "Can you share a time when you had to motivate a team or a colleague during a low point?"),
+        ("behavioral", "Describe a project where you had to manage conflicting priorities. How did you handle it?"),
+        ("behavioral", "Tell me about a time when you disagreed with a decision made by your manager. What did you do?"),
+        ("behavioral", "Give an example of a goal you set and how you achieved it."),
+        ("behavioral", "Describe a time when your initiative made a significant impact."),
+        ("behavioral", "How have you handled working with someone whose style was very different from yours?"),
+        ("behavioral", "Tell me about a time when you identified a problem before it became serious. What actions did you take?"),
+        ("behavioral", "Tell me about a time you took initiative at work."),
+        ("behavioral", "Describe a time you had to meet a tough deadline."),
+        ("behavioral", "Have you ever led a team? What was the result?"),
+        ("behavioral", "Tell me about a time you handled a conflict at work."),
+        ("behavioral", "Describe a situation where you had to multitask."),
+        ("behavioral", "How have you handled a task outside your job scope?"),
+        ("behavioral", "Tell me about a time you improved a process."),
+        ("behavioral", "Describe a time you had to explain something complex."),
+        ("behavioral", "Have you ever made a difficult ethical decision?"),
+        ("behavioral", "Tell me about a time you received unexpected feedback.")
+        ]
 
     situational_questions = [
         ("situational", "How do you troubleshoot when a project isn’t progressing as planned?"),
@@ -128,7 +168,27 @@ def generate_questions(
         ("situational", "How would you manage project requirements that change mid-cycle?"),
         ("situational", "You’ve been asked to lead a team with clashing personalities. How would you handle it?"),
         ("situational", "If an unexpected client demand threatens your schedule, what would you do?"),
-        ("situational", "What would be your first steps when starting a new project in an unfamiliar area?")
+        ("situational", "What would be your first steps when starting a new project in an unfamiliar area?"),
+        ("situational", "How would you handle a last-minute change to project scope?"),
+        ("situational", "What would you do if a stakeholder kept changing their requests?"),
+        ("situational", "You're assigned multiple urgent tasks. How would you prioritize them?"),
+        ("situational", "How would you handle a situation where a deadline may be missed?"),
+        ("situational", "What steps would you take if your team missed a key milestone?"),
+        ("situational", "How would you respond if a client rejected your proposal?"),
+        ("situational", "How would you begin a project with unclear objectives?"),
+        ("situational", "What would you do if your team wasn’t collaborating effectively?"),
+        ("situational", "You're asked to use unfamiliar software. How would you proceed?"),
+        ("situational", "How would you deal with vague or conflicting instructions?"),
+        ("situational", "You notice a recurring error in a colleague’s work. What do you do?"),
+        ("situational", "You're asked to present to leadership on short notice. How do you prepare?"),
+        ("situational", "What would you do if your team resisted an important change?"),
+        ("situational", "If your project budget was suddenly cut, what would be your first move?"),
+        ("situational", "A client provides critical feedback. How would you handle it?"),
+        ("situational", "You're assigned to lead a failing project. What steps would you take?"),
+        ("situational", "Two teammates strongly disagree on a solution. How do you respond?"),
+        ("situational", "A key report is missing data right before submission. What do you do?"),
+        ("situational", "Your manager is unavailable and a quick decision is needed. How do you act?"),
+        ("situational", "How would you ensure a smooth handover when leaving a project?")
     ]
 
     # 4) Select pool
@@ -142,7 +202,8 @@ def generate_questions(
         pool = technical_questions + behavioral_questions + situational_questions + cv_insight_questions
 
     pool = [q for q in pool if q]  # drop None
-    selected_questions = random.sample(pool, min(8, len(pool)))
+    random.shuffle(pool)  # Shuffle to ensure randomness every time
+    selected_questions = pool[:8]  # Select the first 8 shuffled questions
 
     # 5) Text-to-Speech
     client = get_text_to_speech_client()
