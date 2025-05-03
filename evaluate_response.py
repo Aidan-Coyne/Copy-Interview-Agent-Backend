@@ -152,11 +152,21 @@ def semantic_similarity(q: str, r: str) -> float:
     return score
 
 def clarity_score(q: str, r: str) -> float:
+    """
+    Combines:
+      1) an NLI-based entailment % (0–100)
+      2) a rule-based bump if the answer starts with a clear one-sentence summary
+    """
+    # (1) get entailment %
     out = nli(f"{q} </s></s> {r}")
-    ent = next((x for x in out if x["label"]=="ENTAILMENT"), None)
-    score = ent["score"]*100 if ent else 0
-    logger.debug(f"Clarity score: {score:.1f}%")
-    return score
+    ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
+    entail_pct = (ent["score"] * 100) if ent else 0.0
+
+    # (2) bump up to at least 60 if they lead with "I would...", "My approach...", etc.
+    first_line = r.strip().split("\n", 1)[0].lower()
+    if first_line.startswith(("i would", "i'll", "i will", "my approach", "my plan")):
+        return max(entail_pct, 60.0)
+    return entail_pct
 
 def tfidf_bm25_score(q: str, r: str) -> float:
     bm25 = BM25Okapi([r.lower().split()])
@@ -169,7 +179,7 @@ def slot_match_score(q: str, r: str) -> float:
     qd, rd = nlp(q), nlp(r)
     slots = [t for t in qd if t.dep_ in ("ROOT","dobj")]
     if not slots: return 0.0
-    matches = sum(1 for s in slots for t in rd if t.lemma_==s.lemma_)
+    matches = sum(1 for s in slots for t in rd if t.lemma_ == s.lemma_)
     score = matches/len(slots)*100
     logger.debug(f"Slot match: {score:.1f}%")
     return score
@@ -227,13 +237,13 @@ def score_response(
     tokens = [
         t.lemma_.lower().strip(string.punctuation)
         for t in nlp(response_text)
-        if not t.is_stop and len(t.text)>2
+        if not t.is_stop and len(t.text) > 2
     ]
     kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
     matched, missing = [], []
     for kw in kws:
         pct = max(fuzz.partial_ratio(kw, tok) for tok in tokens) if tokens else 0
-        (matched if pct>=80 else missing).append(kw)
+        (matched if pct >= 80 else missing).append(kw)
     keyword_score = len(matched)/len(kws)*100 if kws else 0
 
     # Sub-scores
@@ -243,7 +253,7 @@ def score_response(
     slot  = slot_match_score   (question_text, response_text)
 
     # Composite relevance
-    rel_w = {"semantic":.4,"clarity":.25,"tfidf":.15,"slot":.20}
+    rel_w = {"semantic":.5, "clarity":.25, "tfidf":.15, "slot":.10}
     question_score = (
         sem*rel_w["semantic"]
       + clr*rel_w["clarity"]
@@ -252,10 +262,10 @@ def score_response(
     )
 
     # Final 0–10
-    base_w = {"technical":(.5,.5),"behavioral":(.3,.7),"situational":(.3,.7)}
-    kw_w, qt_w = base_w.get(question_type,(0.4,0.6))
-    final_num = deep_round(kw_w*keyword_score + qt_w*question_score,2)
-    score10   = round(final_num/10,1)
+    base_w = {"technical":(.5,.5), "behavioral":(.3,.7), "situational":(.3,.7)}
+    kw_w, qt_w = base_w.get(question_type, (0.3,0.7))
+    final_num = deep_round(kw_w*keyword_score + qt_w*question_score, 2)
+    score10   = round(final_num/10, 1)
 
     suggestions: List[Dict[str,str]] = []
     suggestions.append({
@@ -270,9 +280,9 @@ def score_response(
         )
     })
 
-    if sem   < 70: suggestions.append({"area":"Topic Fit",                     "feedback":pick_feedback("Topic Fit", sem)})
-    if clr   < 70: suggestions.append({"area":"Clear Answer",                 "feedback":pick_feedback("Clear Answer", clr)})
-    if tfidf < 70: suggestions.append({"area":"Question Terms Used",           "feedback":pick_feedback("Question Terms Used", tfidf)})
+    if sem   < 70: suggestions.append({"area":"Topic Fit",                      "feedback":pick_feedback("Topic Fit", sem)})
+    if clr   < 70: suggestions.append({"area":"Clear Answer",                  "feedback":pick_feedback("Clear Answer", clr)})
+    if tfidf < 70: suggestions.append({"area":"Question Terms Used",            "feedback":pick_feedback("Question Terms Used", tfidf)})
     if slot  < 70: suggestions.append({"area":"Question Action & Object Answered","feedback":pick_feedback("Question Action & Object Answered", slot)})
 
     if missing:
@@ -281,15 +291,15 @@ def score_response(
             "feedback":f"Consider adding missing keywords: {', '.join(missing)}."
         })
 
-    # Question‐type tips
-    if question_type=="behavioral":
+    # Question-type tips
+    if question_type == "behavioral":
         suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
-    elif question_type=="situational":
+    elif question_type == "situational":
         suggestions.append({"area":"Situational Strategy","feedback":"Outline your reasoning steps clearly."})
-    elif question_type=="technical":
+    elif question_type == "technical":
         suggestions.append({"area":"Technical Depth","feedback":"Include specific tools or concrete examples."})
 
-    if len(response_text.split())<20:
+    if len(response_text.split()) < 20:
         suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
     return {
@@ -298,10 +308,7 @@ def score_response(
         "keyword_matches": matched,
         "expected_keywords": kws,
         "skills_shown": extract_skills_from_response(response_text),
-        "relevance_breakdown":{
-            "semantic":sem, "clarity":clr,
-            "tfidf":tfidf,   "slot":slot
-        },
+        "relevance_breakdown": {"semantic":sem, "clarity":clr, "tfidf":tfidf, "slot":slot},
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }
