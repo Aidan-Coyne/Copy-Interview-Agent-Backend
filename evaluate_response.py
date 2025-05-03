@@ -18,8 +18,6 @@ from google.cloud import storage
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, util
 from transformers import pipeline
-# no longer needed here:
-# from question_generation import extract_sectors  
 
 # ─── Logging setup ──────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.DEBUG)
@@ -66,6 +64,9 @@ def transcribe_audio(audio_data: bytes) -> str:
         raise TranscriptionError(f"Speech recognition error: {e}")
 
 def extract_company_keywords(company_info: str) -> List[str]:
+    """
+    Fallback extractor from your stored company search snippets.
+    """
     try:
         items = json.loads(company_info)
         kws = []
@@ -94,38 +95,38 @@ def get_relevant_keywords(
     company_info: str
 ) -> Tuple[List[str], str, Optional[str]]:
     """
-    Now merges:
-      - role_keywords  (from question_data["role_keywords"])
-      - sector_keywords(from question_data["sector_keywords"])
-      - extracted company keywords
-      - CV-skills and experience from the question payload
+    Merges in this order:
+      1) role_keywords   (from question_data["role_keywords"])
+      2) sector_keywords (from question_data["sector_keywords"])
+      3) company snippet keywords
+      4) CV-skills + experience + job_role + company_name
     """
     qtext  = question_data.get("question_text","").lower()
     skills = question_data.get("skills", [])
     exp    = question_data.get("experience", "")
 
-    # start with company + free-form CV keywords
-    kws = set(extract_company_keywords(company_info))
-    for s in skills:
-        kws.add(nlp(s)[0].lemma_.lower())
-    if exp:
-        kws.add(nlp(exp)[0].lemma_.lower())
-    # job_role & company_name
-    if job_role:
-        kws.add(nlp(job_role)[0].lemma_.lower())
-    if company_name:
-        kws.add(nlp(company_name)[0].lemma_.lower())
-
-    # **NEW**: include the role & sector keywords you passed in
+    # 1) start with your curated role & sector keywords
+    kws = set()
     for rk in question_data.get("role_keywords", []):
         kws.add(nlp(rk)[0].lemma_.lower())
     for sk in question_data.get("sector_keywords", []):
         kws.add(nlp(sk)[0].lemma_.lower())
 
-    # filter
+    # 2) fallback to company + free-form CV keywords
+    kws.update(extract_company_keywords(company_info))
+    for s in skills:
+        kws.add(nlp(s)[0].lemma_.lower())
+    if exp:
+        kws.add(nlp(exp)[0].lemma_.lower())
+    if job_role:
+        kws.add(nlp(job_role)[0].lemma_.lower())
+    if company_name:
+        kws.add(nlp(company_name)[0].lemma_.lower())
+
+    # filter out tiny tokens
     relevant = [k for k in kws if len(k) > 2]
 
-    # question-type detection
+    # detect question type
     if "tell me about a time" in qtext or "describe a situation" in qtext:
         qtype = "behavioral"
     elif "how would you" in qtext:
@@ -135,7 +136,7 @@ def get_relevant_keywords(
     else:
         qtype = "general"
 
-    # we no longer pull sector here — it's already on the question_data if you need it
+    # we no longer need to recompute sector here
     return relevant, qtype, None
 
 # --------------------------------------------------
@@ -223,8 +224,11 @@ def score_response(
     company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
     # Keyword fuzzy-match
-    tokens = [t.lemma_.lower().strip(string.punctuation)
-              for t in nlp(response_text) if not t.is_stop and len(t.text)>2]
+    tokens = [
+        t.lemma_.lower().strip(string.punctuation)
+        for t in nlp(response_text)
+        if not t.is_stop and len(t.text)>2
+    ]
     kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
     matched, missing = [], []
     for kw in kws:
@@ -234,20 +238,24 @@ def score_response(
 
     # Sub-scores
     sem   = semantic_similarity(question_text, response_text)
-    clr   = clarity_score(question_text, response_text)
-    tfidf = tfidf_bm25_score(question_text, response_text)
-    slot  = slot_match_score(question_text, response_text)
+    clr   = clarity_score      (question_text, response_text)
+    tfidf = tfidf_bm25_score   (question_text, response_text)
+    slot  = slot_match_score   (question_text, response_text)
 
     # Composite relevance
     rel_w = {"semantic":.4,"clarity":.25,"tfidf":.15,"slot":.20}
-    question_score = (sem*rel_w["semantic"] + clr*rel_w["clarity"]
-                      + tfidf*rel_w["tfidf"] + slot*rel_w["slot"])
+    question_score = (
+        sem*rel_w["semantic"]
+      + clr*rel_w["clarity"]
+      + tfidf*rel_w["tfidf"]
+      + slot*rel_w["slot"]
+    )
 
     # Final 0–10
     base_w = {"technical":(.5,.5),"behavioral":(.3,.7),"situational":(.3,.7)}
     kw_w, qt_w = base_w.get(question_type,(0.4,0.6))
     final_num = deep_round(kw_w*keyword_score + qt_w*question_score,2)
-    score10 = round(final_num/10,1)
+    score10   = round(final_num/10,1)
 
     suggestions: List[Dict[str,str]] = []
     suggestions.append({
@@ -257,10 +265,8 @@ def score_response(
     suggestions.append({
         "area":"Relevance Breakdown",
         "feedback":(
-            f"Topic Fit: {sem:.1f}%  •  "
-            f"Clear Answer: {clr:.1f}%  •  "
-            f"Question Terms Used: {tfidf:.1f}%  •  "
-            f"Question Action & Object Answered: {slot:.1f}%"
+            f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
+            f"Question Terms Used: {tfidf:.1f}%  •  Question Action & Object Answered: {slot:.1f}%"
         )
     })
 
@@ -275,7 +281,7 @@ def score_response(
             "feedback":f"Consider adding missing keywords: {', '.join(missing)}."
         })
 
-    # Question-type tips
+    # Question‐type tips
     if question_type=="behavioral":
         suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
     elif question_type=="situational":
@@ -292,7 +298,10 @@ def score_response(
         "keyword_matches": matched,
         "expected_keywords": kws,
         "skills_shown": extract_skills_from_response(response_text),
-        "relevance_breakdown": {"semantic":sem,"clarity":clr,"tfidf":tfidf,"slot":slot},
+        "relevance_breakdown":{
+            "semantic":sem, "clarity":clr,
+            "tfidf":tfidf,   "slot":slot
+        },
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }

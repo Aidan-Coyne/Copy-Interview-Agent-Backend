@@ -10,6 +10,7 @@ from job_role_library import job_role_library
 from sector_library import sector_library
 from keyword_extraction import extract_keywords  # ONNX-backed extractor
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO)
 nlp = spacy.load("en_core_web_sm")
@@ -25,18 +26,12 @@ def get_text_to_speech_client():
     """
     Initialize Google Cloud Text-to-Speech client using service account JSON.
     """
-    try:
-        google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-        if not google_creds_json:
-            raise ValueError("GOOGLE_APPLICATION_CREDENTIALS_JSON not found.")
-
-        creds_dict = json.loads(google_creds_json)
-        credentials = service_account.Credentials.from_service_account_info(creds_dict)
-        client = texttospeech.TextToSpeechClient(credentials=credentials)
-        return client
-    except Exception as e:
-        logging.error(f"Failed to initialize TTS client: {e}")
-        raise
+    google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if not google_creds_json:
+        raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not found.")
+    creds_dict = json.loads(google_creds_json)
+    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+    return texttospeech.TextToSpeechClient(credentials=credentials)
 
 def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket, session_id: str) -> str:
     """
@@ -55,10 +50,11 @@ def generate_questions(
     selected_question_type: str = "mixed",
     firebase_bucket=None,
     session_id: str = None,
-    cv_embeddings: any = None  # still accepted but no longer passed to extract_keywords()
+    cv_embeddings: any = None
 ) -> list[dict]:
     """
     Generate interview questions (text + audio) based on CV, company info, and cached embeddings.
+    This version parallelizes the TTS+upload step.
     """
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
@@ -97,7 +93,6 @@ def generate_questions(
         ("technical", "Can you provide an example of how you innovated to solve a persistent problem?"),
         ("technical", "Tell me more about a technical achievement listed on your CV."),
         ("technical", "Can you elaborate on your role in the most recent project on your CV?"),
-        ("technical", "Which skill listed on your CV are you most confident in, and why?"),
         ("technical", "What’s a technical challenge you described in your CV and how did you address it?"),
         ("technical", "Looking at your CV, which project best shows your ability to work independently?"),
         ("technical", "Which project on your CV best showcases your technical strengths?"),
@@ -168,7 +163,8 @@ def generate_questions(
         ("situational", "You’ve been asked to lead a team with clashing personalities. How would you handle it?"),
         ("situational", "If an unexpected client demand threatens your schedule, what would you do?"),
         ("situational", "What would be your first steps when starting a new project in an unfamiliar area?"),
-        ("situational", "How would you handle a last-minute change to project scope?"),        ("situational", "What would you do if a stakeholder kept changing their requests?"),
+        ("situational", "How would you handle a last-minute change to project scope?"),
+        ("situational", "What would you do if a stakeholder kept changing their requests?"),
         ("situational", "You're assigned multiple urgent tasks. How would you prioritize them?"),
         ("situational", "How would you handle a situation where a deadline may be missed?"),
         ("situational", "What steps would you take if your team missed a key milestone?"),
@@ -199,51 +195,59 @@ def generate_questions(
     else:
         pool = technical_questions + behavioral_questions + situational_questions + cv_insight_questions
 
-    pool = [q for q in pool if q]  # drop None
+    pool = [q for q in pool if q]
     random.shuffle(pool)
     selected_questions = pool[:8]
 
-    # 5) Text-to-Speech
-    client = get_text_to_speech_client()
-    voice = texttospeech.VoiceSelectionParams(
+    # 5) Prepare TTS client & voice config
+    client     = get_text_to_speech_client()
+    voice      = texttospeech.VoiceSelectionParams(
         language_code="en-GB",
         name="en-GB-Wavenet-B",
         ssml_gender=texttospeech.SsmlVoiceGender.MALE,
     )
     audio_conf = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
 
-    question_data = []
-    for i, (q_type, text) in enumerate(selected_questions):
-        try:
-            ssml = f"<speak><prosody rate='1' pitch='-10%'>{text}</prosody></speak>"
-            resp = client.synthesize_speech(
-                input=texttospeech.SynthesisInput(ssml=ssml),
-                voice=voice,
-                audio_config=audio_conf
-            )
-            if not resp.audio_content:
-                logging.error(f"No audio for Q{i+1}")
-                continue
+    # placeholder for results
+    question_data: list[dict] = [None] * len(selected_questions)
 
-            fname = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i+1}.mp3"
-            url   = upload_audio_to_firebase(resp.audio_content, fname, firebase_bucket, session_id)
-            logging.info(f"Uploaded question {i+1} to Firebase: {url}")
+    # worker to synthesize & upload
+    def _synth_and_upload(i: int, q_type: str, text: str):
+        ssml = f"<speak><prosody rate='1' pitch='-10%'>{text}</prosody></speak>"
+        resp = client.synthesize_speech(
+            input=texttospeech.SynthesisInput(ssml=ssml),
+            voice=voice,
+            audio_config=audio_conf
+        )
+        if not resp.audio_content:
+            logging.error(f"No audio for Q{i+1}")
+            return
 
-            question_data.append({
-                "question_text":    text,
-                "audio_file":       url,
-                "skills":           relevant_skills,
-                "experience":       relevant_experience,
-                "sector":           company_sectors,
-                "question_type":    q_type,
-                # ← NEW:
-                "role_keywords":    relevant_skills,
-                "sector_keywords":  company_sectors.split(", ") if company_sectors else []
-            })
-        except Exception as e:
-            logging.error(f"Error generating audio for question {i+1}: {e}")
+        fname = f"{company_name.lower().replace(' ', '_')}_{job_role.lower().replace(' ', '_')}_q{i+1}.mp3"
+        url = upload_audio_to_firebase(resp.audio_content, fname, firebase_bucket, session_id)
+
+        question_data[i] = {
+            "question_text":    text,
+            "audio_file":       url,
+            "skills":           relevant_skills,
+            "experience":       relevant_experience,
+            "sector":           company_sectors,
+            "question_type":    q_type,
+            "role_keywords":    relevant_skills,
+            "sector_keywords":  company_sectors.split(", ") if company_sectors else []
+        }
+
+    # 6) Parallelize
+    with ThreadPoolExecutor() as exe:
+        futures = [
+            exe.submit(_synth_and_upload, i, q_type, text)
+            for i, (q_type, text) in enumerate(selected_questions)
+        ]
+        for _ in as_completed(futures):
+            pass  # results are filled in question_data by index
 
     return question_data
+
 
 def extract_relevant_skills_from_role(job_role: str):
     job_role_lower = job_role.lower()
@@ -255,6 +259,7 @@ def extract_relevant_skills_from_role(job_role: str):
                 return random.sample(keywords, min(2, len(keywords)))
     return []
 
+
 def extract_relevant_experience(cv_text: str):
     doc = nlp(cv_text)
     terms = [
@@ -263,6 +268,7 @@ def extract_relevant_experience(cv_text: str):
         if token.pos_ in ["NOUN", "VERB"] and len(token.text) > 2
     ]
     return ", ".join(terms[:2]) if terms else "your field"
+
 
 def extract_sectors(company_info: dict):
     matched_sectors = set()
