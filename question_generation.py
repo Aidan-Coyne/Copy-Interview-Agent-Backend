@@ -63,16 +63,16 @@ def generate_questions(
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
     # 1) Role & experience extraction
-    relevant_skills = extract_relevant_skills_from_role(job_role)
+    relevant_skills     = extract_relevant_skills_from_role(job_role)
     relevant_experience = extract_relevant_experience(cv_text)
-    company_sectors = extract_sectors(company_info)
+    company_sectors     = extract_sectors(company_info)
 
     if not relevant_skills:
         relevant_skills = random.sample(generic_skill_phrases, 2)
     relevant_experience = relevant_experience or "your field"
 
     # 2) CV keywords using ONNX extractor
-    cv_keywords = extract_keywords(cv_text, top_n=10)
+    cv_keywords          = extract_keywords(cv_text, top_n=10)
     selected_cv_keywords = random.sample(cv_keywords, min(3, len(cv_keywords))) if cv_keywords else []
 
     # Build CV-insight questions
@@ -97,12 +97,11 @@ def generate_questions(
         ("technical", "Can you provide an example of how you innovated to solve a persistent problem?"),
         ("technical", "Tell me more about a technical achievement listed on your CV."),
         ("technical", "Can you elaborate on your role in the most recent project on your CV?"),
-        ("technical", "What specific contributions did you make to the project at {last_company}?"),
         ("technical", "Which skill listed on your CV are you most confident in, and why?"),
         ("technical", "What’s a technical challenge you described in your CV and how did you address it?"),
         ("technical", "Looking at your CV, which project best shows your ability to work independently?"),
         ("technical", "Which project on your CV best showcases your technical strengths?"),
-        ("technical", "Can you walk me through a problem you solved that’s listed on your CV?"),        
+        ("technical", "Can you walk me through a problem you solved that’s listed on your CV?"),
         ("technical", "How do you approach debugging complex issues?"),
         ("technical", "Describe your process for testing new features."),
         ("technical", "What tools do you use for version control and why?"),
@@ -128,7 +127,7 @@ def generate_questions(
         ])),
         ("behavioral", f"Can you give an example of when you used {random.choice(generic_skill_phrases)}?"),
         ("behavioral", f"How do you demonstrate {random.choice(generic_skill_phrases)} in your work?"),
-        ("behavioral", f"What inspired you to pursue a career in {job_role}?"),
+        ("behavioral", f"What inspired you to pursue a career as a {job_role}?"),
         ("behavioral", "Can you share an example of how you adapted to new tools or methods?"),
         ("behavioral", "Tell me about a project where your input was critical to its success."),
         ("behavioral", "Describe a time when you managed tight deadlines while maintaining high quality."),
@@ -155,7 +154,7 @@ def generate_questions(
         ("behavioral", "Describe a time you had to explain something complex."),
         ("behavioral", "Have you ever made a difficult ethical decision?"),
         ("behavioral", "Tell me about a time you received unexpected feedback.")
-        ]
+    ]
 
     situational_questions = [
         ("situational", "How do you troubleshoot when a project isn’t progressing as planned?"),
@@ -169,8 +168,7 @@ def generate_questions(
         ("situational", "You’ve been asked to lead a team with clashing personalities. How would you handle it?"),
         ("situational", "If an unexpected client demand threatens your schedule, what would you do?"),
         ("situational", "What would be your first steps when starting a new project in an unfamiliar area?"),
-        ("situational", "How would you handle a last-minute change to project scope?"),
-        ("situational", "What would you do if a stakeholder kept changing their requests?"),
+        ("situational", "How would you handle a last-minute change to project scope?"),        ("situational", "What would you do if a stakeholder kept changing their requests?"),
         ("situational", "You're assigned multiple urgent tasks. How would you prioritize them?"),
         ("situational", "How would you handle a situation where a deadline may be missed?"),
         ("situational", "What steps would you take if your team missed a key milestone?"),
@@ -202,8 +200,8 @@ def generate_questions(
         pool = technical_questions + behavioral_questions + situational_questions + cv_insight_questions
 
     pool = [q for q in pool if q]  # drop None
-    random.shuffle(pool)  # Shuffle to ensure randomness every time
-    selected_questions = pool[:8]  # Select the first 8 shuffled questions
+    random.shuffle(pool)
+    selected_questions = pool[:8]
 
     # 5) Text-to-Speech
     client = get_text_to_speech_client()
@@ -232,12 +230,15 @@ def generate_questions(
             logging.info(f"Uploaded question {i+1} to Firebase: {url}")
 
             question_data.append({
-                "question_text":   text,
-                "audio_file":      url,
-                "skills":          relevant_skills,
-                "experience":      relevant_experience,
-                "sector":          company_sectors,
-                "question_type":   q_type
+                "question_text":    text,
+                "audio_file":       url,
+                "skills":           relevant_skills,
+                "experience":       relevant_experience,
+                "sector":           company_sectors,
+                "question_type":    q_type,
+                # ← NEW:
+                "role_keywords":    relevant_skills,
+                "sector_keywords":  company_sectors.split(", ") if company_sectors else []
             })
         except Exception as e:
             logging.error(f"Error generating audio for question {i+1}: {e}")

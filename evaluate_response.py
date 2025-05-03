@@ -18,7 +18,8 @@ from google.cloud import storage
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, util
 from transformers import pipeline
-from question_generation import extract_sectors  # kept for potential future use
+# no longer needed here:
+# from question_generation import extract_sectors  
 
 # ─── Logging setup ──────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.DEBUG)
@@ -38,18 +39,6 @@ class TranscriptionError(Exception):
 # --------------------------------------------------
 # Core utility functions
 # --------------------------------------------------
-
-def download_user_response_from_firebase(session_id: str, question_index: int, bucket: storage.Bucket) -> bytes:
-    blob_path = f"sessions/{session_id}/audio_responses/response_{question_index+1}.mp3"
-    blob = bucket.blob(blob_path)
-    if not blob.exists():
-        raise HTTPException(status_code=404, detail="Audio response not found in storage.")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-        blob.download_to_filename(tmp.name)
-    data = open(tmp.name, "rb").read()
-    try: os.remove(tmp.name)
-    except: pass
-    return data
 
 def convert_to_wav(audio_data: bytes) -> bytes:
     in_fn  = f"temp_{uuid.uuid4().hex}.webm"
@@ -104,18 +93,39 @@ def get_relevant_keywords(
     company_name: str,
     company_info: str
 ) -> Tuple[List[str], str, Optional[str]]:
+    """
+    Now merges:
+      - role_keywords  (from question_data["role_keywords"])
+      - sector_keywords(from question_data["sector_keywords"])
+      - extracted company keywords
+      - CV-skills and experience from the question payload
+    """
     qtext  = question_data.get("question_text","").lower()
     skills = question_data.get("skills", [])
     exp    = question_data.get("experience", "")
 
+    # start with company + free-form CV keywords
     kws = set(extract_company_keywords(company_info))
     for s in skills:
         kws.add(nlp(s)[0].lemma_.lower())
-    if exp: kws.add(nlp(exp)[0].lemma_.lower())
-    if job_role: kws.add(nlp(job_role)[0].lemma_.lower())
-    if company_name: kws.add(nlp(company_name)[0].lemma_.lower())
-    relevant = [k for k in kws if len(k)>2]
+    if exp:
+        kws.add(nlp(exp)[0].lemma_.lower())
+    # job_role & company_name
+    if job_role:
+        kws.add(nlp(job_role)[0].lemma_.lower())
+    if company_name:
+        kws.add(nlp(company_name)[0].lemma_.lower())
 
+    # **NEW**: include the role & sector keywords you passed in
+    for rk in question_data.get("role_keywords", []):
+        kws.add(nlp(rk)[0].lemma_.lower())
+    for sk in question_data.get("sector_keywords", []):
+        kws.add(nlp(sk)[0].lemma_.lower())
+
+    # filter
+    relevant = [k for k in kws if len(k) > 2]
+
+    # question-type detection
     if "tell me about a time" in qtext or "describe a situation" in qtext:
         qtype = "behavioral"
     elif "how would you" in qtext:
@@ -125,12 +135,8 @@ def get_relevant_keywords(
     else:
         qtype = "general"
 
-    try:
-        sector = extract_sectors(json.loads(company_info))
-    except:
-        sector = None
-
-    return relevant, qtype, sector
+    # we no longer pull sector here — it's already on the question_data if you need it
+    return relevant, qtype, None
 
 # --------------------------------------------------
 # Relevance sub-scores
@@ -144,11 +150,11 @@ def semantic_similarity(q: str, r: str) -> float:
     logger.debug(f"Semantic similarity: {score:.1f}%")
     return score
 
-def entailment_score(q: str, r: str) -> float:
+def clarity_score(q: str, r: str) -> float:
     out = nli(f"{q} </s></s> {r}")
     ent = next((x for x in out if x["label"]=="ENTAILMENT"), None)
     score = ent["score"]*100 if ent else 0
-    logger.debug(f"Entailment score: {score:.1f}%")
+    logger.debug(f"Clarity score: {score:.1f}%")
     return score
 
 def tfidf_bm25_score(q: str, r: str) -> float:
@@ -168,7 +174,7 @@ def slot_match_score(q: str, r: str) -> float:
     return score
 
 # --------------------------------------------------
-# Friendly tiered feedback templates
+# Three-tier feedback templates
 # --------------------------------------------------
 
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
@@ -180,60 +186,24 @@ def get_tier(score: float) -> str:
 
 TEMPLATES = {
     "Topic Fit": {
-        "needs_improvement": [
-            "Let’s zero in on the question’s main topic—start by restating it to show alignment.",
-            "Make sure your overall idea mirrors what the prompt is asking for."
-        ],
-        "on_track": [
-            "Good overall match—tightening your phrasing will make it pop even more.",
-            "You’ve got the topic right; lead with it to make it crystal clear."
-        ],
-        "strong": [
-            "Great topic alignment! You could add an example to drive it home.",
-            "Strong fit—try phrasing it as a one-sentence summary up front for extra polish."
-        ]
+        "needs_improvement":["Make sure your answer matches the main topic more closely."],
+        "on_track":["Good topic match—just tighten up the phrasing."],
+        "strong":["Excellent topic alignment!"]
     },
     "Clear Answer": {
-        "needs_improvement": [
-            "Start with a one-sentence summary to make your answer crystal clear.",
-            "Kick off with ‘I would…’ so the reviewer immediately knows your approach."
-        ],
-        "on_track": [
-            "Nice structure—consider moving your summary to the very first line.",
-            "Good clarity—opening with a TL;DR will sharpen your message."
-        ],
-        "strong": [
-            "Your answer is clear! You could add a quick example to illustrate it.",
-            "Excellent clarity—lead with a bold statement of your plan for extra impact."
-        ]
+        "needs_improvement":["Start with a direct one-sentence summary of your plan."],
+        "on_track":["Your answer is clear—consider opening with “I would…” for extra punch."],
+        "strong":["Very clear answer! You could add an illustrative example next time."]
     },
     "Question Terms Used": {
-        "needs_improvement": [
-            "Weave in more of the exact words from the question to highlight relevance.",
-            "Try sprinkling in the prompt’s keywords naturally—they’ll boost your fit."
-        ],
-        "on_track": [
-            "Good use of key terms—see if you can sprinkle in a couple more for extra impact.",
-            "You’ve hit most keywords; including one or two more will strengthen it."
-        ],
-        "strong": [
-            "Great keyword coverage! Try swapping in a synonym to show range.",
-            "Solid matching—alternating synonyms can show your vocabulary."
-        ]
+        "needs_improvement":["Include more of the question’s exact words to show relevance."],
+        "on_track":["Nice use of key terms—add a synonym or two to show range."],
+        "strong":["Great keyword coverage!"]
     },
     "Question Action & Object Answered": {
-        "needs_improvement": [
-            "Name the verb (action) and the thing you’re acting on in your first sentence.",
-            "Cover both parts: what you’d do, and who/what you’d do it to."
-        ],
-        "on_track": [
-            "You mentioned both parts—bringing them up front will elevate it.",
-            "Nice coverage—leading with ‘I would [action] the [object]…’ is even stronger."
-        ],
-        "strong": [
-            "Excellent coverage of action & object—try varying phrasing next time.",
-            "Solid slot match—consider swapping order for variety."
-        ]
+        "needs_improvement":["Mention both the action and the object right away (e.g. “I would do X to Y…”)."],
+        "on_track":["Good action & object usage—bring them up front."],
+        "strong":["Excellent coverage of action & object!"]
     }
 }
 
@@ -252,7 +222,7 @@ def score_response(
     question_type: str,
     company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
-    # Keyword fuzzy match
+    # Keyword fuzzy-match
     tokens = [t.lemma_.lower().strip(string.punctuation)
               for t in nlp(response_text) if not t.is_stop and len(t.text)>2]
     kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
@@ -264,82 +234,65 @@ def score_response(
 
     # Sub-scores
     sem   = semantic_similarity(question_text, response_text)
-    ent   = entailment_score(question_text, response_text)
+    clr   = clarity_score(question_text, response_text)
     tfidf = tfidf_bm25_score(question_text, response_text)
     slot  = slot_match_score(question_text, response_text)
 
-    # Combined relevance
-    rel_w = {"semantic":.4,"entailment":.3,"tfidf":.15,"slot":.15}
-    question_score = (sem*rel_w["semantic"] + ent*rel_w["entailment"] +
-                      tfidf*rel_w["tfidf"] + slot*rel_w["slot"])
+    # Composite relevance
+    rel_w = {"semantic":.4,"clarity":.25,"tfidf":.15,"slot":.20}
+    question_score = (sem*rel_w["semantic"] + clr*rel_w["clarity"]
+                      + tfidf*rel_w["tfidf"] + slot*rel_w["slot"])
 
-    # Final hybrid
+    # Final 0–10
     base_w = {"technical":(.5,.5),"behavioral":(.3,.7),"situational":(.3,.7)}
     kw_w, qt_w = base_w.get(question_type,(0.4,0.6))
     final_num = deep_round(kw_w*keyword_score + qt_w*question_score,2)
     score10 = round(final_num/10,1)
 
-    # Build suggestions
     suggestions: List[Dict[str,str]] = []
-
     suggestions.append({
-        "area": "Scoring Explanation",
-        "feedback": f"Final score {score10}/10 (Keywords: {keyword_score:.1f}% × {kw_w}, Relevance: {question_score:.1f}% × {qt_w})."
+        "area":"Scoring Explanation",
+        "feedback":f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
     })
     suggestions.append({
-        "area": "Relevance Breakdown",
-        "feedback": (
+        "area":"Relevance Breakdown",
+        "feedback":(
             f"Topic Fit: {sem:.1f}%  •  "
-            f"Clear Answer: {ent:.1f}%  •  "
+            f"Clear Answer: {clr:.1f}%  •  "
             f"Question Terms Used: {tfidf:.1f}%  •  "
             f"Question Action & Object Answered: {slot:.1f}%"
         )
     })
 
-    if sem < 70:
-        suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
-    if ent < 70:
-        suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", ent)})
-    if tfidf < 70:
-        suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", tfidf)})
-    if slot < 70:
-        suggestions.append({"area": "Question Action & Object Answered", "feedback": pick_feedback("Question Action & Object Answered", slot)})
+    if sem   < 70: suggestions.append({"area":"Topic Fit",                     "feedback":pick_feedback("Topic Fit", sem)})
+    if clr   < 70: suggestions.append({"area":"Clear Answer",                 "feedback":pick_feedback("Clear Answer", clr)})
+    if tfidf < 70: suggestions.append({"area":"Question Terms Used",           "feedback":pick_feedback("Question Terms Used", tfidf)})
+    if slot  < 70: suggestions.append({"area":"Question Action & Object Answered","feedback":pick_feedback("Question Action & Object Answered", slot)})
 
     if missing:
         suggestions.append({
-            "area": "Keyword Usage",
-            "feedback": f"Consider adding missing keywords: {', '.join(missing)}."
+            "area":"Keyword Usage",
+            "feedback":f"Consider adding missing keywords: {', '.join(missing)}."
         })
 
-    if question_type == "behavioral":
+    # Question-type tips
+    if question_type=="behavioral":
         suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
-    elif question_type == "situational":
+    elif question_type=="situational":
         suggestions.append({"area":"Situational Strategy","feedback":"Outline your reasoning steps clearly."})
-    elif question_type == "technical":
-        suggestions.append({"area":"Technical Depth","feedback":"Include specific tools or examples."})
+    elif question_type=="technical":
+        suggestions.append({"area":"Technical Depth","feedback":"Include specific tools or concrete examples."})
 
-    if len(response_text.split()) < 20:
-        suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
+    if len(response_text.split())<20:
+        suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
     return {
         "score": score10,
+        "clarity_tier": get_tier(clr),
         "keyword_matches": matched,
         "expected_keywords": kws,
         "skills_shown": extract_skills_from_response(response_text),
-        "relevance_breakdown": {"semantic":sem,"entailment":ent,"tfidf":tfidf,"slot":slot},
+        "relevance_breakdown": {"semantic":sem,"clarity":clr,"tfidf":tfidf,"slot":slot},
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }
-
-# --------------------------------------------------
-# Debug runner
-# --------------------------------------------------
-if __name__ == "__main__":
-    test_q = "Tell me about a time you led a team successfully."
-    test_r = "I led five engineers, improved throughput by 20%, and delivered on time."
-    kws, qtype, sec = get_relevant_keywords(
-        {"question_text": test_q, "skills": ["leadership"], "experience": ""},
-        "PM", "Acme", "[]"
-    )
-    import pprint
-    pprint.pprint(score_response(test_r, test_q, kws, qtype, sec))
