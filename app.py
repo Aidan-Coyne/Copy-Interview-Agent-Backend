@@ -94,7 +94,6 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
             raise HTTPException(status_code=500, detail="Unsupported file type for Firebase upload.")
     except Exception as e:
         logger.error(f"🔥 Firebase upload failed: {e}")
-        # wrap any underlying error
         raise HTTPException(status_code=500, detail=str(e))
     blob.make_public()
     return blob.public_url
@@ -113,8 +112,6 @@ async def upload_cv(
     session_id = f"{company_name}_{job_role}_{file.filename}"
     logger.info(f"Received upload_cv request for session: {session_id}")
 
-    # Any HTTPException or other Exception will now be handled
-    # by our exception handlers above.
     if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
         raise HTTPException(status_code=400,
                             detail="Unsupported file type. Only PDF and Word documents are allowed.")
@@ -125,8 +122,8 @@ async def upload_cv(
     cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
     logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
-    # Extract CV text
-    cv_text, _ = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
+    # Extract CV text and keywords
+    cv_text, cv_keywords = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
     if not cv_text.strip():
         raise HTTPException(status_code=400,
                             detail="CV text extraction failed or CV is empty.")
@@ -136,6 +133,7 @@ async def upload_cv(
     session_data[session_id] = {
         "cv_text": cv_text,
         "cv_embeddings": cv_embeddings,
+        "cv_keywords": cv_keywords  # ✅ Save CV keywords
     }
 
     # Fetch company info
@@ -151,7 +149,8 @@ async def upload_cv(
         selected_question_type=question_type,
         firebase_bucket=bucket,
         session_id=session_id,
-        cv_embeddings=cv_embeddings
+        cv_embeddings=cv_embeddings,
+        cv_keywords=cv_keywords  # ✅ Pass CV keywords
     )
 
     # Store rest of session data
@@ -202,7 +201,7 @@ async def evaluate_audio_response(
             question_data,
             session["job_role"],
             session["company_name"],
-            json.dumps(session["company_info"])
+            session["company_info"]  # ✅ Don't re-encode
         )
     result = evaluate_response.score_response(
         response_text,

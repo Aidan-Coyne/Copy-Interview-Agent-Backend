@@ -23,9 +23,6 @@ generic_skill_phrases = [
 ]
 
 def get_text_to_speech_client():
-    """
-    Initialize Google Cloud Text-to-Speech client using service account JSON.
-    """
     google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
     if not google_creds_json:
         raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON not found.")
@@ -34,9 +31,6 @@ def get_text_to_speech_client():
     return texttospeech.TextToSpeechClient(credentials=credentials)
 
 def upload_audio_to_firebase(audio_bytes: bytes, filename: str, firebase_bucket, session_id: str) -> str:
-    """
-    Uploads TTS audio bytes to Firebase under the given session.
-    """
     blob = firebase_bucket.blob(f"sessions/{session_id}/audio_questions/{filename}")
     blob.upload_from_file(BytesIO(audio_bytes), content_type="audio/mpeg")
     blob.make_public()
@@ -50,15 +44,12 @@ def generate_questions(
     selected_question_type: str = "mixed",
     firebase_bucket=None,
     session_id: str = None,
-    cv_embeddings: any = None
+    cv_embeddings: any = None,
+    cv_keywords: list = None
 ) -> list[dict]:
-    """
-    Generate interview questions (text + audio) based on CV, company info, and cached embeddings.
-    This version parallelizes the TTS+upload step.
-    """
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
-    # 1) Role & experience extraction
+    # 1) Extract keywords and context
     relevant_skills     = extract_relevant_skills_from_role(job_role)
     relevant_experience = extract_relevant_experience(cv_text)
     company_sectors     = extract_sectors(company_info)
@@ -67,13 +58,11 @@ def generate_questions(
         relevant_skills = random.sample(generic_skill_phrases, 2)
     relevant_experience = relevant_experience or "your field"
 
-    # 2) CV keywords using ONNX extractor
-    cv_keywords          = extract_keywords(cv_text, top_n=10)
-    selected_cv_keywords = random.sample(cv_keywords, min(3, len(cv_keywords))) if cv_keywords else []
+    # 2) Use CV keywords passed in (already extracted)
+    selected_cv_keywords = random.sample(cv_keywords, min(2, len(cv_keywords))) if cv_keywords else []
 
-    # Build CV-insight questions
     cv_insight_questions = []
-    for idx, kw in enumerate(selected_cv_keywords[:3]):
+    for idx, kw in enumerate(selected_cv_keywords):
         cv_insight_questions.append((
             "cv_insight",
             f"Your CV mentions '{kw}'. Can you elaborate on how this experience helped shape your skills?"
@@ -185,7 +174,7 @@ def generate_questions(
         ("situational", "How would you ensure a smooth handover when leaving a project?")
     ]
 
-    # 4) Select pool
+    # 4) Select and shuffle
     if selected_question_type.lower() == "technical":
         pool = technical_questions
     elif selected_question_type.lower() == "behavioral":
@@ -199,19 +188,17 @@ def generate_questions(
     random.shuffle(pool)
     selected_questions = pool[:8]
 
-    # 5) Prepare TTS client & voice config
-    client     = get_text_to_speech_client()
-    voice      = texttospeech.VoiceSelectionParams(
+    # 5) TTS config
+    client = get_text_to_speech_client()
+    voice = texttospeech.VoiceSelectionParams(
         language_code="en-GB",
         name="en-GB-Wavenet-B",
         ssml_gender=texttospeech.SsmlVoiceGender.MALE,
     )
     audio_conf = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
 
-    # placeholder for results
     question_data: list[dict] = [None] * len(selected_questions)
 
-    # worker to synthesize & upload
     def _synth_and_upload(i: int, q_type: str, text: str):
         ssml = f"<speak><prosody rate='1' pitch='-10%'>{text}</prosody></speak>"
         resp = client.synthesize_speech(
@@ -233,32 +220,35 @@ def generate_questions(
             "experience":       relevant_experience,
             "sector":           company_sectors,
             "question_type":    q_type,
-            "role_keywords":    relevant_skills,
-            "sector_keywords":  company_sectors.split(", ") if company_sectors else []
+            "role_keywords":    relevant_skills[:2],
+            "sector_keywords":  company_sectors.split(", ")[:2] if company_sectors else [],
+            "cv_keywords":      selected_cv_keywords[:2]
         }
 
-    # 6) Parallelize
     with ThreadPoolExecutor() as exe:
         futures = [
             exe.submit(_synth_and_upload, i, q_type, text)
             for i, (q_type, text) in enumerate(selected_questions)
         ]
         for _ in as_completed(futures):
-            pass  # results are filled in question_data by index
+            pass
 
     return question_data
 
-
 def extract_relevant_skills_from_role(job_role: str):
     job_role_lower = job_role.lower()
+    best_match = None
+    best_score = 0
     for discipline, roles in job_role_library.items():
-        if discipline.lower() in job_role_lower and "_keywords" in roles:
+        if "_keywords" in roles and fuzz.partial_ratio(discipline.lower(), job_role_lower) > 80:
             return random.sample(roles["_keywords"], min(2, len(roles["_keywords"])))
         for role_title, keywords in roles.items():
-            if role_title.lower() in job_role_lower and isinstance(keywords, list):
-                return random.sample(keywords, min(2, len(keywords)))
-    return []
-
+            if isinstance(keywords, list):
+                score = fuzz.partial_ratio(role_title.lower(), job_role_lower)
+                if score > best_score:
+                    best_match = keywords
+                    best_score = score
+    return random.sample(best_match, min(2, len(best_match))) if best_match else []
 
 def extract_relevant_experience(cv_text: str):
     doc = nlp(cv_text)
@@ -268,7 +258,6 @@ def extract_relevant_experience(cv_text: str):
         if token.pos_ in ["NOUN", "VERB"] and len(token.text) > 2
     ]
     return ", ".join(terms[:2]) if terms else "your field"
-
 
 def extract_sectors(company_info: dict):
     matched_sectors = set()
