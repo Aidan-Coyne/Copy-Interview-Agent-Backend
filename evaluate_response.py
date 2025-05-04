@@ -253,7 +253,7 @@ def score_response(
     slot  = slot_match_score   (question_text, response_text)
 
     # Composite relevance
-    rel_w = {"semantic":.5, "clarity":.25, "tfidf":.15, "slot":.10}
+    rel_w = {"semantic":.7, "clarity":.15, "tfidf":.10, "slot":.5}
     question_score = (
         sem*rel_w["semantic"]
       + clr*rel_w["clarity"]
@@ -262,7 +262,7 @@ def score_response(
     )
 
     # Final 0–10
-    base_w = {"technical":(.5,.5), "behavioral":(.3,.7), "situational":(.3,.7)}
+    base_w = {"technical":(.4,.6), "behavioral":(.2,.8), "situational":(.2,.8)}
     kw_w, qt_w = base_w.get(question_type, (0.3,0.7))
     final_num = deep_round(kw_w*keyword_score + qt_w*question_score, 2)
     score10   = round(final_num/10, 1)
