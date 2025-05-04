@@ -86,18 +86,18 @@ def generate_questions(
         ("technical", "Looking at your CV, which project best shows your ability to work independently?"),
         ("technical", "Which project on your CV best showcases your technical strengths?"),
         ("technical", "Can you walk me through a problem you solved that’s listed on your CV?"),
-        ("technical", "How do you approach debugging complex issues?"),
+        ("technical", f"In your most recent project, how did you apply {relevant_skills[0]} and what was the result?") if len(relevant_skills) > 0 else None,
         ("technical", "Describe your process for testing new features."),
         ("technical", "What tools do you use for version control and why?"),
         ("technical", "How do you manage technical debt in projects?"),
         ("technical", "Have you ever optimized a slow system? How did you do it?"),
         ("technical", "How do you ensure your work is secure?"),
-        ("technical", "Can you walk me through your deployment process?"),
-        ("technical", "What’s your experience with automation or CI/CD pipelines?"),
-        ("technical", "How do you prioritize bugs and feature requests?"),
+        ("technical", f"In your most recent project, how did you apply {relevant_skills[0]} and what was the result?") if len(relevant_skills) > 0 else None,
+        ("technical", f"What advice would you give someone starting to learn {relevant_skills[0]} based on your own experience?") if len(relevant_skills) > 0 else None,
+        ("technical", f"What challenges did you face while applying {relevant_skills[0]} in a real-world setting?") if len(relevant_skills) > 0 else None,
         ("technical", "Describe a time when you had to quickly learn a new technology."),
         ("technical", "How do you collaborate with non-technical team members?"),
-        ("technical", "What metrics do you use to measure software performance?")
+        ("technical", f"How did you build your expertise in {relevant_skills[0]}?") if len(relevant_skills) > 0 else None,
     ]
 
     behavioral_questions = [

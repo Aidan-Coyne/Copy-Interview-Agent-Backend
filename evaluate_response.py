@@ -202,7 +202,7 @@ def score_response(
     )
 
     base_w = {"technical": (.4, .6), "behavioral": (.2, .8), "situational": (.2, .8)}
-    kw_w, qt_w = base_w.get(question_type, (0.3, 0.7))
+    kw_w, qt_w = base_w.get(question_type, (0.2, 0.8))
     final_num = deep_round(kw_w * keyword_score + qt_w * question_score, 2)
     score10   = round(final_num / 10, 1)
 
