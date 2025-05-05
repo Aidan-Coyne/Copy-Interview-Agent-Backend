@@ -150,7 +150,7 @@ async def upload_cv(
         firebase_bucket=bucket,
         session_id=session_id,
         cv_embeddings=cv_embeddings,
-        cv_keywords=cv_keywords  # ✅ Pass CV keywords
+        cv_keywords=cv_keywords
     )
 
     # Store rest of session data
@@ -168,6 +168,7 @@ async def upload_cv(
         "questions_data": questions_data,
         "cv_url": cv_public_url
     }
+
 
 @app.post("/evaluate_response/")
 async def evaluate_audio_response(
@@ -187,13 +188,15 @@ async def evaluate_audio_response(
     question_data = questions[question_index]
     audio_data    = await audio_file.read()
 
-    # Upload response audio
-    response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.mp3"
-    response_url  = upload_to_firebase(audio_data, bucket, response_path, "audio/mpeg")
+    # ─── CHANGED HERE ─────────────────────────────────────────
+    # Upload raw WebM/Opus to Firebase
+    response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.webm"
+    response_url  = upload_to_firebase(audio_data, bucket, response_path, "audio/webm")
 
-    # Convert & transcribe
+    # FFmpeg (inside convert_to_wav) will transparently turn our .webm → .wav
     wav_data      = evaluate_response.convert_to_wav(audio_data)
     response_text = evaluate_response.transcribe_audio(wav_data)
+    # ────────────────────────────────────────────────────────────
 
     # Score response
     relevant_keywords, question_type, company_sector = \
@@ -201,7 +204,7 @@ async def evaluate_audio_response(
             question_data,
             session["job_role"],
             session["company_name"],
-            session["company_info"]  # ✅ Don't re-encode
+            session["company_info"]
         )
     result = evaluate_response.score_response(
         response_text,
@@ -225,6 +228,7 @@ def end_session(session_id: str):
         del session_data[session_id]
         logger.info(f"Session {session_id} data removed from session_data.")
     return {"message": f"Session {session_id} ended successfully."}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
