@@ -5,14 +5,16 @@ import string
 import logging
 import subprocess
 import random
-import time                              # ← added for timing
+import time                              # ← for timing
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
 
-import speech_recognition as sr
+# ─── Vosk for offline ASR ─────────────────────────────────────────────────────
+from vosk import Model, KaldiRecognizer
+
+# ─── spaCy, Transformers & ONNX for scoring ─────────────────────────────────
 import spacy
 from fuzzywuzzy import fuzz
-from fastapi import HTTPException
 from rank_bm25 import BM25Okapi
 from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
@@ -21,6 +23,11 @@ import numpy as np
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# ─── Load Vosk model once at import ──────────────────────────────────────────
+VOSK_MODEL_PATH = "/app/models/vosk-model-small-en-us-0.15"
+vosk_model = Model(VOSK_MODEL_PATH)
+logger.info(f"✅ Loaded Vosk model from {VOSK_MODEL_PATH}")
 
 # ─── ONNX semantic model ─────────────────────────────────────────────────────
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
@@ -32,7 +39,6 @@ nli = pipeline("text-classification", model="roberta-large-mnli")
 nlp = spacy.load("en_core_web_sm")
 
 # ─── Dynamic feedback LLM ────────────────────────────────────────────────────
-# (make sure your Dockerfile pre-caches this)
 dynamic_feedback = pipeline(
     "text2text-generation",
     model="google/flan-t5-small",
@@ -62,16 +68,25 @@ def convert_to_wav(audio_data: bytes) -> bytes:
     )
     return proc.stdout
 
+# ─── Vosk-based transcription ─────────────────────────────────────────────────
 def transcribe_audio(audio_data: bytes) -> str:
-    wf = wave.open(BytesIO(audio_data), 'rb')
-    audio = sr.AudioData(audio_data, wf.getframerate(), wf.getsampwidth())
-    recognizer = sr.Recognizer()
-    try:
-        return recognizer.recognize_google(audio).lower()
-    except sr.UnknownValueError:
+    """
+    Takes raw WAV bytes (16 kHz, mono, PCM) and returns the lowercase transcript.
+    """
+    start = time.time()
+    rec = KaldiRecognizer(vosk_model, 16000)
+    rec.SetWords(True)
+    # feed the entire WAV buffer to Vosk
+    if not rec.AcceptWaveform(audio_data):
+        # partial result is ignored; we only grab the final
+        pass
+    result_json = rec.Result()
+    text = json.loads(result_json).get("text", "")
+    elapsed = time.time() - start
+    logger.info(f"⏱ Vosk transcription took {elapsed:.2f}s")
+    if not text:
         raise TranscriptionError("Could not understand audio. Please speak clearly.")
-    except sr.RequestError as e:
-        raise TranscriptionError(f"Speech recognition error: {e}")
+    return text.lower()
 
 def extract_skills_from_response(response_text: str) -> List[str]:
     doc = nlp(response_text)
@@ -113,7 +128,7 @@ def encode(text: str) -> np.ndarray:
     )
     ort_inputs = {k: tokens[k] for k in ("input_ids", "attention_mask")}
     outputs = session.run(None, ort_inputs)
-    last_hidden = outputs[0]
+    last_hidden = outputs[0]  # (1,128,384)
     mask = tokens["attention_mask"][..., None]
     masked_hidden = last_hidden * mask
     summed = masked_hidden.sum(axis=1)
@@ -201,7 +216,7 @@ def score_response(
     question_type: str,
     company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
-    start_time = time.time()  
+    start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
 
     # Keyword matching
@@ -226,10 +241,10 @@ def score_response(
     # Composite
     rel_w = {"semantic": .7, "clarity": .15, "tfidf": .10, "slot": .05}
     question_score = (
-        sem   * rel_w["semantic"] +
-        clr   * rel_w["clarity"]  +
-        tfidf * rel_w["tfidf"]    +
-        slot  * rel_w["slot"]
+        sem * rel_w["semantic"] +
+        clr * rel_w["clarity"]  +
+        tfidf * rel_w["tfidf"]   +
+        slot * rel_w["slot"]
     )
 
     # Final 0–10
