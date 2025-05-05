@@ -17,17 +17,28 @@ from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
 import numpy as np
 
+# ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# ✅ Load ONNX model for semantic similarity
+# ─── ONNX semantic model ─────────────────────────────────────────────────────
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 session = ort.InferenceSession(MODEL_PATH)
 
-# ✅ NLI model and spaCy for clarity & keywords
+# ─── NLI & spaCy ─────────────────────────────────────────────────────────────
 nli = pipeline("text-classification", model="roberta-large-mnli")
 nlp = spacy.load("en_core_web_sm")
+
+# ─── Dynamic feedback LLM ────────────────────────────────────────────────────
+# (make sure your Dockerfile pre-caches this)
+dynamic_feedback = pipeline(
+    "text2text-generation",
+    model="google/flan-t5-base",
+    tokenizer="google/flan-t5-base",
+    max_length=200,
+    do_sample=False
+)
 
 def deep_round(value: float, ndigits: int) -> float:
     return round(value, ndigits)
@@ -35,6 +46,7 @@ def deep_round(value: float, ndigits: int) -> float:
 class TranscriptionError(Exception):
     pass
 
+# ─── In-memory FFmpeg convert ─────────────────────────────────────────────────
 def convert_to_wav(audio_data: bytes) -> bytes:
     proc = subprocess.run(
         [
@@ -89,7 +101,7 @@ def get_relevant_keywords(
 
     return relevant, qtype, None
 
-# ✅ ONNX-based embedding with mean pooling
+# ─── ONNX embed + mean pooling ────────────────────────────────────────────────
 def encode(text: str) -> np.ndarray:
     tokens = tokenizer(
         text,
@@ -98,15 +110,15 @@ def encode(text: str) -> np.ndarray:
         padding="max_length",
         max_length=128
     )
-    ort_inputs = {k: tokens[k] for k in ["input_ids", "attention_mask"]}
+    ort_inputs = {k: tokens[k] for k in ("input_ids", "attention_mask")}
     outputs = session.run(None, ort_inputs)
-    last_hidden = outputs[0]  # shape: (1, 128, 384)
-    mask = tokens["attention_mask"][..., None]  # shape: (1, 128, 1)
+    last_hidden = outputs[0]  # (1,128,384)
+    mask = tokens["attention_mask"][..., None]
     masked_hidden = last_hidden * mask
     summed = masked_hidden.sum(axis=1)
     lengths = mask.sum(axis=1)
     mean_pooled = summed / lengths
-    return mean_pooled[0]  # shape: (384,)
+    return mean_pooled[0]
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
@@ -144,6 +156,7 @@ def slot_match_score(q: str, r: str) -> float:
     logger.debug(f"Slot match: {score:.1f}%")
     return score
 
+# ─── Templates ────────────────────────────────────────────────────────────────
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
     for thresh, name in TIERS:
@@ -154,23 +167,23 @@ def get_tier(score: float) -> str:
 TEMPLATES = {
     "Topic Fit": {
         "needs_improvement": ["Make sure your answer matches the main topic more closely."],
-        "on_track": ["Good topic match—just tighten up the phrasing."],
-        "strong": ["Excellent topic alignment!"]
+        "on_track":          ["Good topic match—just tighten up the phrasing."],
+        "strong":            ["Excellent topic alignment!"]
     },
     "Clear Answer": {
         "needs_improvement": ["Start with a direct one-sentence summary of your plan."],
-        "on_track": ["Your answer is clear—consider opening with “I would…” for extra punch."],
-        "strong": ["Very clear answer! You could add an illustrative example next time."]
+        "on_track":          ["Your answer is clear—consider opening with “I would…”."],
+        "strong":            ["Very clear answer! Add an example next time."]
     },
     "Question Terms Used": {
         "needs_improvement": ["Include more of the question’s exact words to show relevance."],
-        "on_track": ["Nice use of key terms—add a synonym or two to show range."],
-        "strong": ["Great keyword coverage!"]
+        "on_track":          ["Nice use of key terms—add synonyms to show range."],
+        "strong":            ["Great keyword coverage!"]
     },
     "Question Action & Object Answered": {
-        "needs_improvement": ["Mention both the action and the object right away (e.g. “I would do X to Y…”)."],
-        "on_track": ["Good action & object usage—bring them up front."],
-        "strong": ["Excellent coverage of action & object!"]
+        "needs_improvement": ["Mention both action & object right away (e.g. “I would do X to Y…”)."],
+        "on_track":          ["Good action & object usage—bring them front."],
+        "strong":            ["Excellent coverage of action & object!"]
     }
 }
 
@@ -178,6 +191,7 @@ def pick_feedback(area: str, score: float) -> str:
     tier = get_tier(score)
     return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
 
+# ─── Main scoring + dynamic LLM feedback ─────────────────────────────────────
 def score_response(
     response_text: str,
     question_text: str,
@@ -185,6 +199,7 @@ def score_response(
     question_type: str,
     company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
+    # Keyword matching
     tokens = [
         t.lemma_.lower().strip(string.punctuation)
         for t in nlp(response_text)
@@ -197,31 +212,35 @@ def score_response(
         (matched if pct >= 80 else missing).append(kw)
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
+    # Subscores
     sem   = semantic_similarity(question_text, response_text)
     clr   = clarity_score      (question_text, response_text)
     tfidf = tfidf_bm25_score   (question_text, response_text)
     slot  = slot_match_score   (question_text, response_text)
 
+    # Composite
     rel_w = {"semantic": .7, "clarity": .15, "tfidf": .10, "slot": .05}
     question_score = (
-        sem * rel_w["semantic"]
-        + clr * rel_w["clarity"]
-        + tfidf * rel_w["tfidf"]
-        + slot * rel_w["slot"]
+        sem   * rel_w["semantic"] +
+        clr   * rel_w["clarity"]  +
+        tfidf * rel_w["tfidf"]    +
+        slot  * rel_w["slot"]
     )
 
+    # Final 0–10
     base_w = {"technical": (.4, .6), "behavioral": (.2, .8), "situational": (.2, .8)}
     kw_w, qt_w = base_w.get(question_type, (0.2, 0.8))
     final_num = deep_round(kw_w * keyword_score + qt_w * question_score, 2)
     score10   = round(final_num / 10, 1)
 
+    # Static suggestions
     suggestions: List[Dict[str, str]] = [
         {
-            "area": "Scoring Explanation",
+            "area":    "Scoring Explanation",
             "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
         },
         {
-            "area": "Relevance Breakdown",
+            "area":    "Relevance Breakdown",
             "feedback": (
                 f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
                 f"Question Terms Used: {tfidf:.1f}%  •  Question Action & Object Answered: {slot:.1f}%"
@@ -229,20 +248,41 @@ def score_response(
         }
     ]
 
-    if sem   < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
-    if clr   < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
-    if tfidf < 70: suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", tfidf)})
-    if slot  < 70: suggestions.append({"area": "Question Action & Object Answered", "feedback": pick_feedback("Question Action & Object Answered", slot)})
+    if sem   < 70: suggestions.append({"area":"Topic Fit",                     "feedback": pick_feedback("Topic Fit", sem)})
+    if clr   < 70: suggestions.append({"area":"Clear Answer",                 "feedback": pick_feedback("Clear Answer", clr)})
+    if tfidf < 70: suggestions.append({"area":"Question Terms Used",          "feedback": pick_feedback("Question Terms Used", tfidf)})
+    if slot  < 70: suggestions.append({"area":"Question Action & Object Answered","feedback": pick_feedback("Question Action & Object Answered", slot)})
     if missing:
-        suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
+        suggestions.append({"area":"Keyword Usage","feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
-        suggestions.append({"area": "Behavioral Structure", "feedback": "Use STAR (Situation, Task, Action, Result)."})
+        suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
     elif question_type == "situational":
-        suggestions.append({"area": "Situational Strategy", "feedback": "Outline your reasoning steps clearly."})
+        suggestions.append({"area":"Situational Strategy","feedback":"Outline your reasoning steps clearly."})
     elif question_type == "technical":
-        suggestions.append({"area": "Technical Depth", "feedback": "Include specific tools or concrete examples."})
+        suggestions.append({"area":"Technical Depth","feedback":"Include specific tools or concrete examples."})
     if len(response_text.split()) < 20:
-        suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
+        suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
+
+    # ─── NEW: dynamic, few-shot LLM feedback ─────────────────────────────────────
+    try:
+        prompt = (
+            "You are an expert interview coach.\n"
+            f"Question: \"{question_text}\"\n"
+            f"Answer: \"{response_text}\"\n"
+            f"Metrics: {{ semantic: {sem:.1f}%, clarity: {clr:.1f}%, "
+            f"tfidf: {tfidf:.1f}%, slot: {slot:.1f}% }}\n\n"
+            "Write:\n"
+            "1. A 1–2 sentence summary of strengths.\n"
+            "2. A 1–2 sentence recommendation for improvement.\n"
+            "3. A concrete example of phrasing.\n"
+        )
+        llm_out = dynamic_feedback(prompt)[0]["generated_text"]
+        suggestions.append({
+            "area": "Personalized Feedback",
+            "feedback": llm_out
+        })
+    except Exception:
+        logger.exception("Failed to generate dynamic feedback")
 
     return {
         "score": score10,

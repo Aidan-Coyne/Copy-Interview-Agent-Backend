@@ -19,31 +19,41 @@ WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Pre‑download spaCy & HF models + verify ONNX runtime
+# 4. Pre-download spaCy, HF & ONNX models + verify ONNX runtime
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    AutoModelForSeq2SeqLM
+)
 
-# spaCy English
+# → spaCy English
 spacy.cli.download("en_core_web_sm")
 
-# ST embeddings (cache)
+# → SBERT embeddings (cache)
 SentenceTransformer("all-MiniLM-L6-v2")
 
-# NLI model (cache)
-model_name = "roberta-large-mnli"
-AutoTokenizer.from_pretrained(model_name)
-AutoModelForSequenceClassification.from_pretrained(model_name)
+# → NLI model (cache)
+nli_model = "roberta-large-mnli"
+AutoTokenizer.from_pretrained(nli_model)
+AutoModelForSequenceClassification.from_pretrained(nli_model)
 
-# ONNX runtime sanity check
+# ─── NEW: pre-download a small seq2seq feedback LLM ─────────────────
+feedback_model = "google/flan-t5-base"
+AutoTokenizer.from_pretrained(feedback_model)
+AutoModelForSeq2SeqLM.from_pretrained(feedback_model)
+# ────────────────────────────────────────────────────────────────
+
+# → ONNX runtime sanity check
 _ = onnxruntime.get_device()
 EOF
 
 # ─── STAGE 2: runtime image ──────────────────────────────────────────────────
 FROM python:3.12-slim
 
-# 1. Re‑create cache dirs & expose cache path
+# 1. Re-create cache dirs & expose cache path
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     HF_HOME=/cache/huggingface \
     SPACY_CACHE=/cache/spacy
@@ -55,7 +65,7 @@ RUN apt-get update && \
       ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. Copy site‑packages, binaries & caches from builder
+# 3. Copy site-packages, binaries & caches from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /cache /cache

@@ -59,17 +59,14 @@ class ONNXEmbedder(BaseEmbedder):
     def __init__(self, session: rt.InferenceSession, tokenizer: AutoTokenizer):
         self.sess      = session
         self.tokenizer = tokenizer
-        inputs        = {inp.name: inp.name for inp in session.get_inputs()}
+        inputs         = {inp.name: inp.name for inp in session.get_inputs()}
         self.input_ids      = inputs.get("input_ids", list(inputs)[0])
         self.attention_mask = inputs.get("attention_mask", list(inputs)[1])
         self.output_name    = session.get_outputs()[0].name
 
     def embed(self, documents: list[str] | np.ndarray) -> np.ndarray:
-        # If KeyBERT is passing in precomputed embeddings, just return them
         if isinstance(documents, np.ndarray):
             return documents
-
-        # Otherwise tokenize and run through ONNX
         enc = self.tokenizer(
             documents,
             return_tensors="np",
@@ -110,7 +107,6 @@ def extract_keywords(
     top_n: int   = 10,
     min_len: int = 3
 ) -> list[str]:
-    # If the input is a JSON list of dicts with "snippet" keys, concatenate them
     try:
         data = json.loads(text)
         if (
@@ -137,20 +133,26 @@ def extract_keywords(
             text_input,
             keyphrase_ngram_range=(1, 2),
             use_mmr=True,
-            nr_candidates=10,
+            nr_candidates=20,
             top_n=top_n
         )
         logger.info(f"Raw KeyBERT candidates: {raw}")
 
-        cleaned = []
-        for item in raw:
-            kw = item[0] if isinstance(item, tuple) else item
-            if len(kw) >= min_len and clean_keyword(kw):
-                cleaned.append(kw)
+        final_keywords = []
+        for kw, _ in raw:
+            kw = kw.strip().lower()
+            if not clean_keyword(kw):
+                continue
+            if " " in kw:
+                # Only discard if both parts are bad
+                parts = kw.split()
+                if all(not clean_keyword(p) for p in parts):
+                    continue
+            final_keywords.append(kw)
 
-        logger.info(f"Extracted & cleaned keywords: {cleaned}")
+        logger.info(f"Extracted & cleaned keywords: {final_keywords}")
         logger.info(f"⏱ Keyword extraction took {time.time() - start:.2f}s")
-        return cleaned
+        return final_keywords[:top_n]
 
     except Exception as e:
         logger.error(f"Error during keyword extraction: {e}", exc_info=True)
