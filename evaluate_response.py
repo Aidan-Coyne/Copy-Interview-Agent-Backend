@@ -5,6 +5,7 @@ import string
 import logging
 import subprocess
 import random
+import time                              # ← added for timing
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -112,7 +113,7 @@ def encode(text: str) -> np.ndarray:
     )
     ort_inputs = {k: tokens[k] for k in ("input_ids", "attention_mask")}
     outputs = session.run(None, ort_inputs)
-    last_hidden = outputs[0]  # (1,128,384)
+    last_hidden = outputs[0]
     mask = tokens["attention_mask"][..., None]
     masked_hidden = last_hidden * mask
     summed = masked_hidden.sum(axis=1)
@@ -150,7 +151,8 @@ def tfidf_bm25_score(q: str, r: str) -> float:
 def slot_match_score(q: str, r: str) -> float:
     qd, rd = nlp(q), nlp(r)
     slots = [t for t in qd if t.dep_ in ("ROOT", "dobj")]
-    if not slots: return 0.0
+    if not slots:
+        return 0.0
     matches = sum(1 for s in slots for t in rd if t.lemma_ == s.lemma_)
     score = matches / len(slots) * 100
     logger.debug(f"Slot match: {score:.1f}%")
@@ -199,6 +201,9 @@ def score_response(
     question_type: str,
     company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
+    start_time = time.time()  
+    logger.info("⏳ Starting evaluation pipeline")
+
     # Keyword matching
     tokens = [
         t.lemma_.lower().strip(string.punctuation)
@@ -247,7 +252,6 @@ def score_response(
             )
         }
     ]
-
     if sem   < 70: suggestions.append({"area":"Topic Fit","feedback": pick_feedback("Topic Fit", sem)})
     if clr   < 70: suggestions.append({"area":"Clear Answer","feedback": pick_feedback("Clear Answer", clr)})
     if tfidf < 70: suggestions.append({"area":"Question Terms Used","feedback": pick_feedback("Question Terms Used", tfidf)})
@@ -263,7 +267,7 @@ def score_response(
     if len(response_text.split()) < 20:
         suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
-    # ─── NEW: dynamic, few-shot LLM feedback ─────────────────────────────────────
+    # ─── Dynamic LLM feedback ─────────────────────────────────────────────────
     try:
         prompt = (
             "You are an expert interview coach.\n"
@@ -276,12 +280,18 @@ def score_response(
             "3. A concrete example of phrasing.\n"
         )
         llm_out = dynamic_feedback(prompt)[0]["generated_text"]
+        logger.debug(f"LLM returned: {llm_out}")
         suggestions.append({
             "area": "Personalized Feedback",
             "feedback": llm_out.strip()
         })
     except Exception:
         logger.exception("Failed to generate dynamic feedback")
+
+    # ─── Final timing & suggestions dump ────────────────────────────────────────
+    elapsed = time.time() - start_time
+    logger.info(f"✅ Evaluation pipeline completed in {elapsed:.2f}s")
+    logger.debug(f"Full suggestions list: {suggestions}")
 
     return {
         "score": score10,
