@@ -89,12 +89,24 @@ def get_relevant_keywords(
 
     return relevant, qtype, None
 
-# ✅ ONNX-based embedding
+# ✅ ONNX-based embedding with mean pooling
 def encode(text: str) -> np.ndarray:
-    tokens = tokenizer(text, return_tensors="np", truncation=True, padding="max_length", max_length=128)
+    tokens = tokenizer(
+        text,
+        return_tensors="np",
+        truncation=True,
+        padding="max_length",
+        max_length=128
+    )
     ort_inputs = {k: tokens[k] for k in ["input_ids", "attention_mask"]}
     outputs = session.run(None, ort_inputs)
-    return outputs[0][0]  # Shape: (384,)
+    last_hidden = outputs[0]  # shape: (1, 128, 384)
+    mask = tokens["attention_mask"][..., None]  # shape: (1, 128, 1)
+    masked_hidden = last_hidden * mask
+    summed = masked_hidden.sum(axis=1)
+    lengths = mask.sum(axis=1)
+    mean_pooled = summed / lengths
+    return mean_pooled[0]  # shape: (384,)
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
