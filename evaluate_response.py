@@ -1,11 +1,9 @@
 import os
-import uuid
 import json
 import wave
 import string
 import logging
 import subprocess
-import tempfile
 import random
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
@@ -14,7 +12,6 @@ import speech_recognition as sr
 import spacy
 from fuzzywuzzy import fuzz
 from fastapi import HTTPException
-from google.cloud import storage
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, util
 from transformers import pipeline
@@ -33,18 +30,27 @@ class TranscriptionError(Exception):
     pass
 
 def convert_to_wav(audio_data: bytes) -> bytes:
-    in_fn  = f"temp_{uuid.uuid4().hex}.webm"
-    out_fn = f"temp_{uuid.uuid4().hex}.wav"
-    with open(in_fn, "wb") as f: f.write(audio_data)
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", in_fn, "-acodec", "pcm_s16le", out_fn],
-        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    """
+    In-memory WebM/Opus → 16 kHz mono PCM WAV via FFmpeg.
+    Avoids temp files by piping stdin→stdout.
+    """
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",           # read from stdin
+            "-acodec", "pcm_s16le",    # signed 16-bit LE PCM
+            "-ar", "16000",            # 16 kHz
+            "-ac", "1",                # mono
+            "-f", "wav",               # WAV
+            "pipe:1"                   # write to stdout
+        ],
+        input=audio_data,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True
     )
-    wav = open(out_fn, "rb").read()
-    for fn in (in_fn, out_fn):
-        try: os.remove(fn)
-        except: pass
-    return wav
+    return proc.stdout
 
 def transcribe_audio(audio_data: bytes) -> str:
     wf = wave.open(BytesIO(audio_data), 'rb')
@@ -193,7 +199,7 @@ def score_response(
     tfidf = tfidf_bm25_score   (question_text, response_text)
     slot  = slot_match_score   (question_text, response_text)
 
-    rel_w = {"semantic": .7, "clarity": .15, "tfidf": .10, "slot": .5}
+    rel_w = {"semantic": .7, "clarity": .15, "tfidf": .10, "slot": .05}
     question_score = (
         sem * rel_w["semantic"]
         + clr * rel_w["clarity"]
