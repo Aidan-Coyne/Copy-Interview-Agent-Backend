@@ -1,4 +1,5 @@
 import os
+import time                                        # ← NEW
 # Set threading to use available CPU cores efficiently
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
@@ -192,23 +193,35 @@ async def evaluate_audio_response(
         raise HTTPException(status_code=400,
                             detail="Session not found. Please generate questions first.")
 
+    total_start = time.time()
+    logger.info(f"⏳ [evaluate_response] start session={session_id!r} question_index={question_index}")
+
     session = session_data[session_id]
     questions = session.get("questions", [])
     if question_index >= len(questions):
         raise HTTPException(status_code=400, detail="Invalid question index.")
 
     question_data = questions[question_index]
-    audio_data    = await audio_file.read()
 
-    # ─── Upload response ─────────────────────────────────────────────
+    # ─── read body ───────────────────────────────────────────────────────────
+    read_start = time.time()
+    audio_data = await audio_file.read()
+    logger.info(f"⏱ read multipart in {(time.time() - read_start):.2f}s")
+
+    # ─── Upload response ─────────────────────────────────────────────────────
+    upload_start = time.time()
     response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.webm"
     response_url  = upload_to_firebase(audio_data, bucket, response_path, "audio/webm")
+    logger.info(f"⏱ firebase.upload took {(time.time() - upload_start):.2f}s")
 
-    # ─── Convert & transcribe ─────────────────────────────────────────
+    # ─── Convert & transcribe ───────────────────────────────────────────────
+    convert_start = time.time()
     wav_data      = evaluate_response.convert_to_wav(audio_data)
     response_text = evaluate_response.transcribe_audio(wav_data)
+    logger.info(f"⏱ convert+transcribe took {(time.time() - convert_start):.2f}s")
 
-    # ─── Evaluate ─────────────────────────────────────────────────────
+    # ─── Evaluate ───────────────────────────────────────────────────────────
+    score_start = time.time()
     relevant_keywords, question_type, company_sector = \
         evaluate_response.get_relevant_keywords(
             question_data,
@@ -223,6 +236,10 @@ async def evaluate_audio_response(
         question_type,
         company_sector
     )
+    logger.info(f"⏱ scoring pipeline took {(time.time() - score_start):.2f}s")
+
+    total_elapsed = time.time() - total_start
+    logger.info(f"✅ [evaluate_response] total time: {total_elapsed:.2f}s")
 
     return JSONResponse(
         content={
