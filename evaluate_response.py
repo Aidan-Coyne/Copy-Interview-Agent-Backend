@@ -13,15 +13,21 @@ import spacy
 from fuzzywuzzy import fuzz
 from fastapi import HTTPException
 from rank_bm25 import BM25Okapi
-from sentence_transformers import SentenceTransformer, util
-from transformers import pipeline
+from transformers import AutoTokenizer, pipeline
+import onnxruntime as ort
+import numpy as np
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-embedder = SentenceTransformer('all-MiniLM-L6-v2')
-nli      = pipeline("text-classification", model="roberta-large-mnli")
-nlp      = spacy.load("en_core_web_sm")
+# ✅ Load ONNX model for semantic similarity
+MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
+tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
+session = ort.InferenceSession(MODEL_PATH)
+
+# ✅ NLI model and spaCy for clarity & keywords
+nli = pipeline("text-classification", model="roberta-large-mnli")
+nlp = spacy.load("en_core_web_sm")
 
 def deep_round(value: float, ndigits: int) -> float:
     return round(value, ndigits)
@@ -30,20 +36,11 @@ class TranscriptionError(Exception):
     pass
 
 def convert_to_wav(audio_data: bytes) -> bytes:
-    """
-    In-memory WebM/Opus → 16 kHz mono PCM WAV via FFmpeg.
-    Avoids temp files by piping stdin→stdout.
-    """
     proc = subprocess.run(
         [
-            "ffmpeg",
-            "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",           # read from stdin
-            "-acodec", "pcm_s16le",    # signed 16-bit LE PCM
-            "-ar", "16000",            # 16 kHz
-            "-ac", "1",                # mono
-            "-f", "wav",               # WAV
-            "pipe:1"                   # write to stdout
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",
+            "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"
         ],
         input=audio_data,
         stdout=subprocess.PIPE,
@@ -65,9 +62,7 @@ def transcribe_audio(audio_data: bytes) -> str:
 
 def extract_skills_from_response(response_text: str) -> List[str]:
     doc = nlp(response_text)
-    return list({t.text.lower() for t in doc if t.pos_ in {"NOUN","VERB"}})
-
-# ─── Updated Function: Only pass role & sector keywords ───────────────────────
+    return list({t.text.lower() for t in doc if t.pos_ in {"NOUN", "VERB"}})
 
 def get_relevant_keywords(
     question_data: Dict[str, Any],
@@ -75,24 +70,14 @@ def get_relevant_keywords(
     company_name: str,
     company_info: str
 ) -> Tuple[List[str], str, Optional[str]]:
-    """
-    Returns:
-        - Relevant keywords (ONLY role_keywords + sector_keywords).
-        - Detected question type.
-        - Sector (unused now, returns None).
-    """
     qtext = question_data.get("question_text", "").lower()
-
-    # Only include role and sector keywords
     kws = set()
     for rk in question_data.get("role_keywords", []):
         kws.add(nlp(rk)[0].lemma_.lower())
     for sk in question_data.get("sector_keywords", []):
         kws.add(nlp(sk)[0].lemma_.lower())
-
     relevant = [k for k in kws if len(k) > 2]
 
-    # Heuristic type detection
     if "tell me about a time" in qtext or "describe a situation" in qtext:
         qtype = "behavioral"
     elif "how would you" in qtext:
@@ -104,10 +89,20 @@ def get_relevant_keywords(
 
     return relevant, qtype, None
 
-# ─── Scoring and Feedback ─────────────────────────────────────────────────────
+# ✅ ONNX-based embedding
+def encode(text: str) -> np.ndarray:
+    tokens = tokenizer(text, return_tensors="np", truncation=True, padding="max_length", max_length=128)
+    ort_inputs = {k: tokens[k] for k in ["input_ids", "attention_mask"]}
+    outputs = session.run(None, ort_inputs)
+    return outputs[0][0]  # Shape: (384,)
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 def semantic_similarity(q: str, r: str) -> float:
-    score = ((util.cos_sim(embedder.encode(q, True), embedder.encode(r, True)).item() + 1) / 2) * 100
+    vec_q = encode(q)
+    vec_r = encode(r)
+    score = ((cosine_similarity(vec_q, vec_r) + 1) / 2) * 100
     logger.debug(f"Semantic similarity: {score:.1f}%")
     return score
 
@@ -123,7 +118,7 @@ def clarity_score(q: str, r: str) -> float:
 
 def tfidf_bm25_score(q: str, r: str) -> float:
     bm25 = BM25Okapi([r.lower().split()])
-    sc   = bm25.get_scores(q.lower().split())[0]
+    sc = bm25.get_scores(q.lower().split())[0]
     score = min(max(sc, 0), 1) * 100
     logger.debug(f"BM25 score: {score:.1f}%")
     return score
@@ -136,8 +131,6 @@ def slot_match_score(q: str, r: str) -> float:
     score = matches / len(slots) * 100
     logger.debug(f"Slot match: {score:.1f}%")
     return score
-
-# ─── Tier & Template-Based Feedback ───────────────────────────────────────────
 
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
@@ -172,8 +165,6 @@ TEMPLATES = {
 def pick_feedback(area: str, score: float) -> str:
     tier = get_tier(score)
     return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
-
-# ─── Main Evaluation Pipeline ─────────────────────────────────────────────────
 
 def score_response(
     response_text: str,
@@ -212,37 +203,32 @@ def score_response(
     final_num = deep_round(kw_w * keyword_score + qt_w * question_score, 2)
     score10   = round(final_num / 10, 1)
 
-    suggestions: List[Dict[str, str]] = []
-    suggestions.append({
-        "area": "Scoring Explanation",
-        "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
-    })
-    suggestions.append({
-        "area": "Relevance Breakdown",
-        "feedback": (
-            f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
-            f"Question Terms Used: {tfidf:.1f}%  •  Question Action & Object Answered: {slot:.1f}%"
-        )
-    })
+    suggestions: List[Dict[str, str]] = [
+        {
+            "area": "Scoring Explanation",
+            "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
+        },
+        {
+            "area": "Relevance Breakdown",
+            "feedback": (
+                f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
+                f"Question Terms Used: {tfidf:.1f}%  •  Question Action & Object Answered: {slot:.1f}%"
+            )
+        }
+    ]
 
     if sem   < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
     if clr   < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
     if tfidf < 70: suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", tfidf)})
     if slot  < 70: suggestions.append({"area": "Question Action & Object Answered", "feedback": pick_feedback("Question Action & Object Answered", slot)})
-
     if missing:
-        suggestions.append({
-            "area": "Keyword Usage",
-            "feedback": f"Consider adding missing keywords: {', '.join(missing)}."
-        })
-
+        suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
         suggestions.append({"area": "Behavioral Structure", "feedback": "Use STAR (Situation, Task, Action, Result)."})
     elif question_type == "situational":
         suggestions.append({"area": "Situational Strategy", "feedback": "Outline your reasoning steps clearly."})
     elif question_type == "technical":
         suggestions.append({"area": "Technical Depth", "feedback": "Include specific tools or concrete examples."})
-
     if len(response_text.split()) < 20:
         suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
 

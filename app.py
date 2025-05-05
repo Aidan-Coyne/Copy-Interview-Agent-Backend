@@ -79,7 +79,20 @@ if google_creds_json:
 else:
     logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
 
-# Store session data, including precomputed embeddings
+# ✅ Download ONNX model from Firebase at startup
+MODEL_LOCAL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
+MODEL_FIREBASE_PATH = "models/paraphrase-MiniLM-L3-v2.onnx"
+
+try:
+    os.makedirs(os.path.dirname(MODEL_LOCAL_PATH), exist_ok=True)
+    model_blob = bucket.blob(MODEL_FIREBASE_PATH)
+    model_blob.download_to_filename(MODEL_LOCAL_PATH)
+    logger.info(f"✅ ONNX model downloaded to: {MODEL_LOCAL_PATH}")
+except Exception as e:
+    logger.error(f"❌ Failed to download ONNX model: {e}")
+    raise
+
+# ─── Session Storage ────────────────────────────────────────────────────────────
 session_data: Dict[str, Dict] = {}
 
 # ✅ Firebase upload helper
@@ -169,7 +182,6 @@ async def upload_cv(
         "cv_url": cv_public_url
     }
 
-
 @app.post("/evaluate_response/")
 async def evaluate_audio_response(
     audio_file: UploadFile = File(...),
@@ -188,17 +200,15 @@ async def evaluate_audio_response(
     question_data = questions[question_index]
     audio_data    = await audio_file.read()
 
-    # ─── CHANGED HERE ─────────────────────────────────────────
-    # Upload raw WebM/Opus to Firebase
+    # ─── Upload response ─────────────────────────────────────────────
     response_path = f"sessions/{session_id}/audio_responses/response_{question_index + 1}.webm"
     response_url  = upload_to_firebase(audio_data, bucket, response_path, "audio/webm")
 
-    # FFmpeg (inside convert_to_wav) will transparently turn our .webm → .wav
+    # ─── Convert & transcribe ─────────────────────────────────────────
     wav_data      = evaluate_response.convert_to_wav(audio_data)
     response_text = evaluate_response.transcribe_audio(wav_data)
-    # ────────────────────────────────────────────────────────────
 
-    # Score response
+    # ─── Evaluate ─────────────────────────────────────────────────────
     relevant_keywords, question_type, company_sector = \
         evaluate_response.get_relevant_keywords(
             question_data,
@@ -228,7 +238,6 @@ def end_session(session_id: str):
         del session_data[session_id]
         logger.info(f"Session {session_id} data removed from session_data.")
     return {"message": f"Session {session_id} ended successfully."}
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
