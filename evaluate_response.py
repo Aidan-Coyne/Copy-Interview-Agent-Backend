@@ -34,8 +34,8 @@ nlp = spacy.load("en_core_web_sm")
 # (make sure your Dockerfile pre-caches this)
 dynamic_feedback = pipeline(
     "text2text-generation",
-    model="google/flan-t5-base",
-    tokenizer="google/flan-t5-base",
+    model="google/flan-t5-small",
+    tokenizer="google/flan-t5-small",
     max_length=200,
     do_sample=False
 )
@@ -236,11 +236,11 @@ def score_response(
     # Static suggestions
     suggestions: List[Dict[str, str]] = [
         {
-            "area":    "Scoring Explanation",
+            "area": "Scoring Explanation",
             "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
         },
         {
-            "area":    "Relevance Breakdown",
+            "area": "Relevance Breakdown",
             "feedback": (
                 f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
                 f"Question Terms Used: {tfidf:.1f}%  •  Question Action & Object Answered: {slot:.1f}%"
@@ -248,9 +248,9 @@ def score_response(
         }
     ]
 
-    if sem   < 70: suggestions.append({"area":"Topic Fit",                     "feedback": pick_feedback("Topic Fit", sem)})
-    if clr   < 70: suggestions.append({"area":"Clear Answer",                 "feedback": pick_feedback("Clear Answer", clr)})
-    if tfidf < 70: suggestions.append({"area":"Question Terms Used",          "feedback": pick_feedback("Question Terms Used", tfidf)})
+    if sem   < 70: suggestions.append({"area":"Topic Fit","feedback": pick_feedback("Topic Fit", sem)})
+    if clr   < 70: suggestions.append({"area":"Clear Answer","feedback": pick_feedback("Clear Answer", clr)})
+    if tfidf < 70: suggestions.append({"area":"Question Terms Used","feedback": pick_feedback("Question Terms Used", tfidf)})
     if slot  < 70: suggestions.append({"area":"Question Action & Object Answered","feedback": pick_feedback("Question Action & Object Answered", slot)})
     if missing:
         suggestions.append({"area":"Keyword Usage","feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
@@ -267,10 +267,9 @@ def score_response(
     try:
         prompt = (
             "You are an expert interview coach.\n"
-            f"Question: \"{question_text}\"\n"
-            f"Answer: \"{response_text}\"\n"
-            f"Metrics: {{ semantic: {sem:.1f}%, clarity: {clr:.1f}%, "
-            f"tfidf: {tfidf:.1f}%, slot: {slot:.1f}% }}\n\n"
+            f"Question: “{question_text}”\n"
+            f"Answer: “{response_text}”\n"
+            f"Metrics: {{semantic: {sem:.1f}%, clarity: {clr:.1f}%, tfidf: {tfidf:.1f}%, slot: {slot:.1f}%}}\n\n"
             "Write:\n"
             "1. A 1–2 sentence summary of strengths.\n"
             "2. A 1–2 sentence recommendation for improvement.\n"
@@ -279,7 +278,7 @@ def score_response(
         llm_out = dynamic_feedback(prompt)[0]["generated_text"]
         suggestions.append({
             "area": "Personalized Feedback",
-            "feedback": llm_out
+            "feedback": llm_out.strip()
         })
     except Exception:
         logger.exception("Failed to generate dynamic feedback")

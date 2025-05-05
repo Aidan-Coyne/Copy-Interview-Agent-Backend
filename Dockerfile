@@ -40,11 +40,10 @@ nli_model = "roberta-large-mnli"
 AutoTokenizer.from_pretrained(nli_model)
 AutoModelForSequenceClassification.from_pretrained(nli_model)
 
-# ─── NEW: pre-download a small seq2seq feedback LLM ─────────────────
-feedback_model = "google/flan-t5-base"
+# ─── NEW: pre-download a small seq2seq feedback LLM ────────────────
+feedback_model = "google/flan-t5-small"
 AutoTokenizer.from_pretrained(feedback_model)
 AutoModelForSeq2SeqLM.from_pretrained(feedback_model)
-# ────────────────────────────────────────────────────────────────
 
 # → ONNX runtime sanity check
 _ = onnxruntime.get_device()
