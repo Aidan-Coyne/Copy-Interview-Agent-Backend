@@ -195,13 +195,7 @@ def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
     logger.debug(f"Clarity: entail={entail:.1f}%, pause_penalty={pause_ratio:.2f}, final={clarity:.1f}%")
     return clarity
 
-# ─── BM25 FOR LEGACY USE ──────────────────────────────────────────────────────
-def tfidf_bm25_score(q: str, r: str) -> float:
-    bm25 = BM25Okapi([r.lower().split()])
-    sc = bm25.get_scores(q.lower().split())[0]
-    return min(max(sc, 0), 1) * 100
-
-# ─── TEMPLATES ───────────────────────────────────────────────────────────────
+# ─── TEMPLATES ────────────────────────────────────────────────────────────────
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
     for thresh, name in TIERS:
@@ -256,10 +250,10 @@ def score_response(
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
     # Subscores
-    sem      = semantic_similarity(question_text, response_text)
+    sem       = semantic_similarity(question_text, response_text)
     wav_bytes = globals().get("latest_wav_bytes", b"")
-    clr      = clarity_score(question_text, response_text, wav_bytes)
-    qterms   = question_terms_score(question_text, response_text)
+    clr       = clarity_score(question_text, response_text, wav_bytes)
+    qterms    = question_terms_score(question_text, response_text)
 
     # Composite weights
     rel_w = {"semantic": .70, "clarity": .15, "qterms": .15}
@@ -294,9 +288,9 @@ def score_response(
             )
         }
     ]
-    if sem   < 70: suggestions.append({"area":"Topic Fit",           "feedback": pick_feedback("Topic Fit", sem)})
-    if clr   < 70: suggestions.append({"area":"Clear Answer",        "feedback": pick_feedback("Clear Answer", clr)})
-    if qterms< 70: suggestions.append({"area":"Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
+    if sem    < 70: suggestions.append({"area":"Topic Fit",           "feedback": pick_feedback("Topic Fit", sem)})
+    if clr    < 70: suggestions.append({"area":"Clear Answer",        "feedback": pick_feedback("Clear Answer", clr)})
+    if qterms < 70: suggestions.append({"area":"Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
     if missing:
         suggestions.append({"area":"Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
@@ -308,40 +302,26 @@ def score_response(
     if len(response_text.split()) < 20:
         suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
-    # ─── FEW-SHOT EXAMPLES + DYNAMIC LLM FEEDBACK ──────────────────────────────
+    # ─── DYNAMIC FEEDBACK: precisely 3 bullets ─────────────────────────────────
     try:
-        # Example-driven prompt
         prompt = "\n".join([
-            # Example 1
-            "Question: “Tell me about a time you led a cross-functional team.”",
-            "Answer: “I organized daily stand-ups, delegated tasks clearly, and ensured on-time delivery.”",
-            "Metrics: semantic=92.5%, clarity=87.0%, question_terms=100.0%",
-            "Feedback:",
-            "• Strengths: You demonstrated excellent topic fit by naming concrete actions (daily stand-ups) and clear delegation language.",
-            "• Improvements: Next time, quantify results (e.g. “reduced delivery time by 15%”) and weave in a brief STAR structure.",
-            "• Rephrasing: “I led daily stand-ups with engineers and designers, delegated tasks based on skill set, and we delivered two sprints ahead of schedule.”",
-            "",
-            # Example 2
-            "Question: “How do you handle tight deadlines?”",
-            "Answer: “I prioritize tasks, communicate proactively, and stay focused on deliverables.”",
-            "Metrics: semantic=88.0%, clarity=80.0%, question_terms=100.0%",
-            "Feedback:",
-            "• Strengths: You used precise verbs like “prioritize” and “communicate proactively,” showing strong clarity.",
-            "• Improvements: Give a real example (e.g. “handled X when Y happened”) and mention a concrete tool or framework.",
-            "• Rephrasing: “When our budget review landed on my desk with 24-hour notice, I triaged line-items, set clear milestones in Asana, and submitted the report six hours early.”",
-            "",
-            # Your turn
             f"Question: “{question_text}”",
             f"Answer: “{response_text}”",
             f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, question_terms={qterms:.1f}%",
-            "Feedback:",
+            "",
+            "Provide exactly three bullet points:",
+            "1. Strengths: identify 1–2 concrete things the candidate did well, citing their wording.",
+            "2. Improvements: give 1–2 actionable suggestions for this specific answer.",
+            "3. Example: show one improved phrasing of a key sentence.",
         ])
         llm_out = dynamic_feedback(prompt)[0]["generated_text"].strip()
         logger.debug(f"LLM returned:\n{llm_out}")
-        suggestions.append({
-            "area": "Personalized Feedback",
-            "feedback": llm_out
-        })
+
+        # split into lines and append each as its own suggestion
+        for line in llm_out.splitlines():
+            clean = line.strip(" •")
+            if clean:
+                suggestions.append({"area": "Personalized Feedback", "feedback": clean})
     except Exception:
         logger.exception("Failed to generate dynamic feedback")
 
