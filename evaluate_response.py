@@ -231,7 +231,8 @@ def score_response(
     question_text: str,
     relevant_keywords: List[str],
     question_type: str,
-    company_sector: Optional[str] = None
+    company_sector: Optional[str] = None,
+    wav_bytes: bytes = b""                    # ← now accepted here
 ) -> Dict[str, Any]:
     start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
@@ -250,10 +251,9 @@ def score_response(
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
     # Subscores
-    sem       = semantic_similarity(question_text, response_text)
-    wav_bytes = globals().get("latest_wav_bytes", b"")
-    clr       = clarity_score(question_text, response_text, wav_bytes)
-    qterms    = question_terms_score(question_text, response_text)
+    sem    = semantic_similarity(question_text, response_text)
+    clr    = clarity_score(question_text, response_text, wav_bytes)
+    qterms = question_terms_score(question_text, response_text)
 
     # Composite weights
     rel_w = {"semantic": .70, "clarity": .15, "qterms": .15}
@@ -307,17 +307,16 @@ def score_response(
         prompt = "\n".join([
             f"Question: “{question_text}”",
             f"Answer: “{response_text}”",
-            f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, question_terms={qterms:.1f}%",
+            f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, question_terms={qterms:.1f}%", 
             "",
             "Provide exactly three bullet points:",
             "1. Strengths: identify 1–2 concrete things the candidate did well, citing their wording.",
             "2. Improvements: give 1–2 actionable suggestions for this specific answer.",
-            "3. Example: show one improved phrasing of a key sentence.",
+            "3. Summary: one line summarising all the feedback.",
         ])
         llm_out = dynamic_feedback(prompt)[0]["generated_text"].strip()
         logger.debug(f"LLM returned:\n{llm_out}")
 
-        # split into lines and append each as its own suggestion
         for line in llm_out.splitlines():
             clean = line.strip(" •")
             if clean:

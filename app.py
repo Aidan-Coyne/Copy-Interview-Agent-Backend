@@ -234,7 +234,8 @@ async def evaluate_audio_response(
         question_data["question_text"],
         relevant_keywords,
         question_type,
-        company_sector
+        company_sector,
+        wav_bytes=wav_data             # ← pass the WAV bytes here
     )
     logger.info(f"⏱ scoring pipeline took {(time.time() - score_start):.2f}s")
 
