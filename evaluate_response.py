@@ -14,6 +14,7 @@ from vosk import Model, KaldiRecognizer
 
 # ─── spaCy, Transformers & ONNX for scoring ─────────────────────────────────
 import spacy
+import webrtcvad                            # ← for pause detection
 from fuzzywuzzy import fuzz
 from rank_bm25 import BM25Okapi
 from transformers import AutoTokenizer, pipeline
@@ -43,7 +44,7 @@ dynamic_feedback = pipeline(
     "text2text-generation",
     model="google/flan-t5-small",
     tokenizer="google/flan-t5-small",
-    max_length=200,
+    max_length=300,
     do_sample=False
 )
 
@@ -70,15 +71,10 @@ def convert_to_wav(audio_data: bytes) -> bytes:
 
 # ─── Vosk-based transcription ─────────────────────────────────────────────────
 def transcribe_audio(audio_data: bytes) -> str:
-    """
-    Takes raw WAV bytes (16 kHz, mono, PCM) and returns the lowercase transcript.
-    """
     start = time.time()
     rec = KaldiRecognizer(vosk_model, 16000)
     rec.SetWords(True)
-    # feed the entire WAV buffer to Vosk
     if not rec.AcceptWaveform(audio_data):
-        # partial result is ignored; we only grab the final
         pass
     result_json = rec.Result()
     text = json.loads(result_json).get("text", "")
@@ -114,7 +110,6 @@ def get_relevant_keywords(
         qtype = "technical"
     else:
         qtype = "general"
-
     return relevant, qtype, None
 
 # ─── ONNX embed + mean pooling ────────────────────────────────────────────────
@@ -128,7 +123,7 @@ def encode(text: str) -> np.ndarray:
     )
     ort_inputs = {k: tokens[k] for k in ("input_ids", "attention_mask")}
     outputs = session.run(None, ort_inputs)
-    last_hidden = outputs[0]  # (1,128,384)
+    last_hidden = outputs[0]           # (1,128,384)
     mask = tokens["attention_mask"][..., None]
     masked_hidden = last_hidden * mask
     summed = masked_hidden.sum(axis=1)
@@ -146,31 +141,88 @@ def semantic_similarity(q: str, r: str) -> float:
     logger.debug(f"Semantic similarity: {score:.1f}%")
     return score
 
-def clarity_score(q: str, r: str) -> float:
-    out = nli(f"{q} </s></s> {r}")
-    ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
-    entail_pct = (ent["score"] * 100) if ent else 0.0
+# ─── Pause detection using WebRTC VAD ────────────────────────────────────────
+_vad = webrtcvad.Vad(2)
 
-    first_line = r.strip().split("\n", 1)[0].lower()
-    if first_line.startswith(("i would", "i'll", "i will", "my approach", "my plan")):
-        return max(entail_pct, 60.0)
-    return entail_pct
+def detect_long_pauses(
+    wav_bytes: bytes,
+    sample_rate: int   = 16000,
+    frame_ms: int      = 30,
+    threshold_ms: int  = 600
+) -> float:
+    wf = wave.open(BytesIO(wav_bytes), "rb")
+    assert wf.getframerate() == sample_rate
+    raw = wf.readframes(wf.getnframes())
+    wf.close()
+
+    frame_bytes = int(sample_rate * frame_ms/1000) * 2
+    chunks = [
+        raw[i:i+frame_bytes].ljust(frame_bytes, b"\0")
+        for i in range(0, len(raw), frame_bytes)
+    ]
+    flags = [_vad.is_speech(c, sample_rate) for c in chunks]
+
+    thresh = threshold_ms // frame_ms
+    long_s = 0
+    cur = 0
+    for is_speech in flags:
+        if not is_speech:
+            cur += 1
+        else:
+            if cur >= thresh:
+                long_s += cur
+            cur = 0
+    if cur >= thresh:
+        long_s += cur
+
+    return long_s * (frame_ms/1000.0)
+
+# ─── Filler-word penalty ─────────────────────────────────────────────────────
+_FILLERS = {"um", "uh", "like", "you know", "so", "actually", "basically", "right"}
+
+def count_filler_words(text: str) -> int:
+    toks = [w.lower().strip(string.punctuation) for w in text.split()]
+    return sum(1 for w in toks if w in _FILLERS)
+
+# ─── Revised clarity scoring ────────────────────────────────────────────────
+def clarity_score(
+    question_text: str,
+    response_text: str,
+    wav_bytes: bytes
+) -> float:
+    """
+    Combines NLI entailment (0–100) with up to 20% penalties for fillers and long pauses.
+    """
+    t0 = time.time()
+    # 1) Base entailment
+    out = nli(f"{question_text} </s></s> {response_text}")
+    ent = next((x for x in out if x["label"]=="ENTAILMENT"), None)
+    base = (ent["score"] * 100) if ent else 0.0
+
+    # 2) Filler penalty (max 20%)
+    fillers = count_filler_words(response_text)
+    wc = max(len(response_text.split()), 1)
+    p_fill = min(fillers / wc, 0.2)
+
+    # 3) Long-pause penalty (max 20% for ≥2s)
+    secs = detect_long_pauses(wav_bytes, threshold_ms=600)
+    p_pause = min(secs / 2.0, 0.2)
+
+    # 4) Apply
+    score = base * (1 - p_fill - p_pause)
+
+    logger.debug(
+        f"clarity→base {base:.1f}%, fillers {fillers}/{wc}→{p_fill*100:.1f}%, "
+        f"pauses {secs:.2f}s→{p_pause*100:.1f}%"
+    )
+    logger.info(f"⏱ clarity_score computed in {time.time()-t0:.2f}s")
+    return round(score, 1)
 
 def tfidf_bm25_score(q: str, r: str) -> float:
     bm25 = BM25Okapi([r.lower().split()])
     sc = bm25.get_scores(q.lower().split())[0]
     score = min(max(sc, 0), 1) * 100
     logger.debug(f"BM25 score: {score:.1f}%")
-    return score
-
-def slot_match_score(q: str, r: str) -> float:
-    qd, rd = nlp(q), nlp(r)
-    slots = [t for t in qd if t.dep_ in ("ROOT", "dobj")]
-    if not slots:
-        return 0.0
-    matches = sum(1 for s in slots for t in rd if t.lemma_ == s.lemma_)
-    score = matches / len(slots) * 100
-    logger.debug(f"Slot match: {score:.1f}%")
     return score
 
 # ─── Templates ────────────────────────────────────────────────────────────────
@@ -189,18 +241,13 @@ TEMPLATES = {
     },
     "Clear Answer": {
         "needs_improvement": ["Start with a direct one-sentence summary of your plan."],
-        "on_track":          ["Your answer is clear—consider opening with “I would…”."],
-        "strong":            ["Very clear answer! Add an example next time."]
+        "on_track":          ["Your answer is clear—consider focusing your main point."],
+        "strong":            ["Very clear answer!"]
     },
     "Question Terms Used": {
         "needs_improvement": ["Include more of the question’s exact words to show relevance."],
         "on_track":          ["Nice use of key terms—add synonyms to show range."],
         "strong":            ["Great keyword coverage!"]
-    },
-    "Question Action & Object Answered": {
-        "needs_improvement": ["Mention both action & object right away (e.g. “I would do X to Y…”)."],
-        "on_track":          ["Good action & object usage—bring them front."],
-        "strong":            ["Excellent coverage of action & object!"]
     }
 }
 
@@ -214,7 +261,8 @@ def score_response(
     question_text: str,
     relevant_keywords: List[str],
     question_type: str,
-    company_sector: Optional[str] = None
+    company_sector: Optional[str] = None,
+    wav_bytes: Optional[bytes] = None   # ← pass in your WAV here
 ) -> Dict[str, Any]:
     start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
@@ -234,17 +282,15 @@ def score_response(
 
     # Subscores
     sem   = semantic_similarity(question_text, response_text)
-    clr   = clarity_score      (question_text, response_text)
-    tfidf = tfidf_bm25_score   (question_text, response_text)
-    slot  = slot_match_score   (question_text, response_text)
+    clr   = clarity_score(question_text, response_text, wav_bytes or b"")
+    tfidf = tfidf_bm25_score(question_text, response_text)
 
-    # Composite
-    rel_w = {"semantic": .7, "clarity": .15, "tfidf": .10, "slot": .05}
+    # Composite (semantic, clarity, tfidf)
+    rel_w = {"semantic": .8, "clarity": .10, "tfidf": .10}
     question_score = (
         sem * rel_w["semantic"] +
-        clr * rel_w["clarity"]  +
-        tfidf * rel_w["tfidf"]   +
-        slot * rel_w["slot"]
+        clr * rel_w["clarity"]   +
+        tfidf * rel_w["tfidf"]
     )
 
     # Final 0–10
@@ -263,16 +309,18 @@ def score_response(
             "area": "Relevance Breakdown",
             "feedback": (
                 f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
-                f"Question Terms Used: {tfidf:.1f}%  •  Question Action & Object Answered: {slot:.1f}%"
+                f"Question Terms Used: {tfidf:.1f}%"
             )
         }
     ]
-    if sem   < 70: suggestions.append({"area":"Topic Fit","feedback": pick_feedback("Topic Fit", sem)})
-    if clr   < 70: suggestions.append({"area":"Clear Answer","feedback": pick_feedback("Clear Answer", clr)})
+    if sem   < 70: suggestions.append({"area":"Topic Fit",           "feedback": pick_feedback("Topic Fit", sem)})
+    if clr   < 70: suggestions.append({"area":"Clear Answer",        "feedback": pick_feedback("Clear Answer", clr)})
     if tfidf < 70: suggestions.append({"area":"Question Terms Used","feedback": pick_feedback("Question Terms Used", tfidf)})
-    if slot  < 70: suggestions.append({"area":"Question Action & Object Answered","feedback": pick_feedback("Question Action & Object Answered", slot)})
     if missing:
-        suggestions.append({"area":"Keyword Usage","feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
+        suggestions.append({
+            "area":"Keyword Usage",
+            "feedback": f"Consider adding missing keywords: {', '.join(missing)}."
+        })
     if question_type == "behavioral":
         suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
     elif question_type == "situational":
@@ -282,23 +330,23 @@ def score_response(
     if len(response_text.split()) < 20:
         suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
-    # ─── Dynamic LLM feedback ─────────────────────────────────────────────────
+    # ─── Dynamic, few-shot LLM feedback ─────────────────────────────────────────
     try:
         prompt = (
-            "You are an expert interview coach.\n"
+            "You are an expert interview coach. Be specific and actionable.\n"
             f"Question: “{question_text}”\n"
             f"Answer: “{response_text}”\n"
-            f"Metrics: {{semantic: {sem:.1f}%, clarity: {clr:.1f}%, tfidf: {tfidf:.1f}%, slot: {slot:.1f}%}}\n\n"
-            "Write:\n"
-            "1. A 1–2 sentence summary of strengths.\n"
-            "2. A 1–2 sentence recommendation for improvement.\n"
-            "3. A concrete example of phrasing.\n"
+            f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, tfidf={tfidf:.1f}%\n\n"
+            "Produce:\n"
+            "• 2–3 sentence summary of strengths (cite the candidate’s wording).\n"
+            "• 2–3 sentence recommendations for improvement (concrete next steps).\n"
+            "• 1 example of an improved phrasing.\n"
         )
-        llm_out = dynamic_feedback(prompt)[0]["generated_text"]
-        logger.debug(f"LLM returned: {llm_out}")
+        llm_out = dynamic_feedback(prompt)[0]["generated_text"].strip()
+        logger.debug(f"LLM returned:\n{llm_out}")
         suggestions.append({
             "area": "Personalized Feedback",
-            "feedback": llm_out.strip()
+            "feedback": llm_out
         })
     except Exception:
         logger.exception("Failed to generate dynamic feedback")
@@ -314,7 +362,11 @@ def score_response(
         "keyword_matches": matched,
         "expected_keywords": kws,
         "skills_shown": extract_skills_from_response(response_text),
-        "relevance_breakdown": {"semantic": sem, "clarity": clr, "tfidf": tfidf, "slot": slot},
+        "relevance_breakdown": {
+            "semantic": sem,
+            "clarity":  clr,
+            "tfidf":    tfidf
+        },
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }
