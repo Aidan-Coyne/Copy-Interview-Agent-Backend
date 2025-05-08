@@ -14,12 +14,14 @@ from vosk import Model, KaldiRecognizer
 
 # ─── spaCy, Transformers & ONNX for scoring ─────────────────────────────────
 import spacy
-import webrtcvad                            # ← for pause detection
 from fuzzywuzzy import fuzz
 from rank_bm25 import BM25Okapi
 from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
 import numpy as np
+
+# ─── VAD for pause detection ─────────────────────────────────────────────────
+import webrtcvad
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.DEBUG)
@@ -141,82 +143,52 @@ def semantic_similarity(q: str, r: str) -> float:
     logger.debug(f"Semantic similarity: {score:.1f}%")
     return score
 
-# ─── Pause detection using WebRTC VAD ────────────────────────────────────────
-_vad = webrtcvad.Vad(2)
+# ─── NEW: long-pause detection using WebRTC VAD ──────────────────────────────
+def detect_long_pauses(wav_bytes: bytes) -> float:
+    """Return approx proportion of silence in the response (0.0–1.0)."""
+    vad = webrtcvad.Vad(2)
+    try:
+        wf = wave.open(BytesIO(wav_bytes), 'rb')
+    except Exception as e:
+        logger.warning(f"Pause detection skipped (could not read WAV): {e}")
+        return 0.0
 
-def detect_long_pauses(
-    wav_bytes: bytes,
-    sample_rate: int   = 16000,
-    frame_ms: int      = 30,
-    threshold_ms: int  = 600
-) -> float:
-    wf = wave.open(BytesIO(wav_bytes), "rb")
-    assert wf.getframerate() == sample_rate
-    raw = wf.readframes(wf.getnframes())
-    wf.close()
+    if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+        logger.warning("Pause detection requires 16 kHz mono PCM; skipping")
+        return 0.0
 
-    frame_bytes = int(sample_rate * frame_ms/1000) * 2
-    chunks = [
-        raw[i:i+frame_bytes].ljust(frame_bytes, b"\0")
-        for i in range(0, len(raw), frame_bytes)
-    ]
-    flags = [_vad.is_speech(c, sample_rate) for c in chunks]
+    frame_duration_ms = 30
+    frames: List[bytes] = []
+    num_speech = 0
 
-    thresh = threshold_ms // frame_ms
-    long_s = 0
-    cur = 0
-    for is_speech in flags:
-        if not is_speech:
-            cur += 1
-        else:
-            if cur >= thresh:
-                long_s += cur
-            cur = 0
-    if cur >= thresh:
-        long_s += cur
+    while True:
+        data = wf.readframes(int(wf.getframerate() * frame_duration_ms / 1000.0))
+        if not data or len(data) < wf.getsampwidth():
+            break
+        is_speech = vad.is_speech(data, wf.getframerate())
+        num_speech += int(is_speech)
+        frames.append(data)
 
-    return long_s * (frame_ms/1000.0)
+    total = len(frames)
+    if total == 0:
+        return 0.0
+    silence_ratio = 1 - (num_speech / total)
+    logger.debug(f"Detected silence ratio: {silence_ratio:.2f}")
+    return silence_ratio
 
-# ─── Filler-word penalty ─────────────────────────────────────────────────────
-_FILLERS = {"um", "uh", "like", "you know", "so", "actually", "basically", "right"}
-
-def count_filler_words(text: str) -> int:
-    toks = [w.lower().strip(string.punctuation) for w in text.split()]
-    return sum(1 for w in toks if w in _FILLERS)
-
-# ─── Revised clarity scoring ────────────────────────────────────────────────
-def clarity_score(
-    question_text: str,
-    response_text: str,
-    wav_bytes: bytes
-) -> float:
+def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
     """
-    Combines NLI entailment (0–100) with up to 20% penalties for fillers and long pauses.
+    Combines NLI entailment with a long-pause penalty.
     """
-    t0 = time.time()
-    # 1) Base entailment
-    out = nli(f"{question_text} </s></s> {response_text}")
-    ent = next((x for x in out if x["label"]=="ENTAILMENT"), None)
-    base = (ent["score"] * 100) if ent else 0.0
+    out = nli(f"{q} </s></s> {r}")
+    ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
+    entail_pct = (ent["score"] * 100) if ent else 0.0
 
-    # 2) Filler penalty (max 20%)
-    fillers = count_filler_words(response_text)
-    wc = max(len(response_text.split()), 1)
-    p_fill = min(fillers / wc, 0.2)
-
-    # 3) Long-pause penalty (max 20% for ≥2s)
-    secs = detect_long_pauses(wav_bytes, threshold_ms=600)
-    p_pause = min(secs / 2.0, 0.2)
-
-    # 4) Apply
-    score = base * (1 - p_fill - p_pause)
-
-    logger.debug(
-        f"clarity→base {base:.1f}%, fillers {fillers}/{wc}→{p_fill*100:.1f}%, "
-        f"pauses {secs:.2f}s→{p_pause*100:.1f}%"
-    )
-    logger.info(f"⏱ clarity_score computed in {time.time()-t0:.2f}s")
-    return round(score, 1)
+    # penalise long pauses
+    pause_ratio = detect_long_pauses(wav_bytes)
+    clarity = entail_pct * (1 - pause_ratio)
+    logger.debug(f"Clarity before pause penalty: {entail_pct:.1f}%, pause_ratio: {pause_ratio:.2f}, final: {clarity:.1f}%")
+    return clarity
 
 def tfidf_bm25_score(q: str, r: str) -> float:
     bm25 = BM25Okapi([r.lower().split()])
@@ -240,13 +212,13 @@ TEMPLATES = {
         "strong":            ["Excellent topic alignment!"]
     },
     "Clear Answer": {
-        "needs_improvement": ["Start with a direct one-sentence summary of your plan."],
-        "on_track":          ["Your answer is clear—consider focusing your main point."],
-        "strong":            ["Very clear answer!"]
+        "needs_improvement": ["Try to reduce long pauses and keep focus."],
+        "on_track":          ["Your answer is clear—nice flow."],
+        "strong":            ["Excellent clarity and flow!"]
     },
     "Question Terms Used": {
         "needs_improvement": ["Include more of the question’s exact words to show relevance."],
-        "on_track":          ["Nice use of key terms—add synonyms to show range."],
+        "on_track":          ["Good use of key terms—add synonyms to show range."],
         "strong":            ["Great keyword coverage!"]
     }
 }
@@ -261,8 +233,7 @@ def score_response(
     question_text: str,
     relevant_keywords: List[str],
     question_type: str,
-    company_sector: Optional[str] = None,
-    wav_bytes: Optional[bytes] = None   # ← pass in your WAV here
+    company_sector: Optional[str] = None
 ) -> Dict[str, Any]:
     start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
@@ -282,8 +253,11 @@ def score_response(
 
     # Subscores
     sem   = semantic_similarity(question_text, response_text)
-    clr   = clarity_score(question_text, response_text, wav_bytes or b"")
-    tfidf = tfidf_bm25_score(question_text, response_text)
+    # pass the raw WAV bytes through so clarity_score can detect pauses
+    # assume you passed wav_bytes into this function or stored globally
+    wav_bytes = globals().get("latest_wav_bytes", b"")
+    clr   = clarity_score      (question_text, response_text, wav_bytes)
+    tfidf = tfidf_bm25_score   (question_text, response_text)
 
     # Composite (semantic, clarity, tfidf)
     rel_w = {"semantic": .8, "clarity": .10, "tfidf": .10}
@@ -315,12 +289,9 @@ def score_response(
     ]
     if sem   < 70: suggestions.append({"area":"Topic Fit",           "feedback": pick_feedback("Topic Fit", sem)})
     if clr   < 70: suggestions.append({"area":"Clear Answer",        "feedback": pick_feedback("Clear Answer", clr)})
-    if tfidf < 70: suggestions.append({"area":"Question Terms Used","feedback": pick_feedback("Question Terms Used", tfidf)})
+    if tfidf < 70: suggestions.append({"area":"Question Terms Used", "feedback": pick_feedback("Question Terms Used", tfidf)})
     if missing:
-        suggestions.append({
-            "area":"Keyword Usage",
-            "feedback": f"Consider adding missing keywords: {', '.join(missing)}."
-        })
+        suggestions.append({"area":"Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
         suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
     elif question_type == "situational":
