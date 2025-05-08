@@ -302,7 +302,7 @@ def score_response(
     if len(response_text.split()) < 20:
         suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
-    # ─── DYNAMIC FEEDBACK: precisely 3 bullets ─────────────────────────────────
+    # ─── DYNAMIC FEEDBACK: exactly 3 bullets ───────────────────────────────────
     try:
         prompt = "\n".join([
             f"Question: “{question_text}”",
