@@ -114,6 +114,23 @@ def get_relevant_keywords(
         qtype = "general"
     return relevant, qtype, None
 
+# ─── NEW: question-terms scoring ─────────────────────────────────────────────
+def question_terms_score(q: str, r: str) -> float:
+    """% of the question’s key lemmatized terms found in the response."""
+    q_doc = nlp(q)
+    q_tokens = {
+        t.lemma_.lower()
+        for t in q_doc
+        if not t.is_stop and t.is_alpha and len(t.text) > 2
+    }
+    if not q_tokens:
+        return 0.0
+    r_lemmas = {t.lemma_.lower() for t in nlp(r)}
+    matches = sum(1 for tok in q_tokens if tok in r_lemmas)
+    score = matches / len(q_tokens) * 100
+    logger.debug(f"Question-terms use: {matches}/{len(q_tokens)} → {score:.1f}%")
+    return score
+
 # ─── ONNX embed + mean pooling ────────────────────────────────────────────────
 def encode(text: str) -> np.ndarray:
     tokens = tokenizer(
@@ -252,19 +269,18 @@ def score_response(
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
     # Subscores
-    sem   = semantic_similarity(question_text, response_text)
-    # pass the raw WAV bytes through so clarity_score can detect pauses
-    # assume you passed wav_bytes into this function or stored globally
+    sem    = semantic_similarity(question_text, response_text)
     wav_bytes = globals().get("latest_wav_bytes", b"")
-    clr   = clarity_score      (question_text, response_text, wav_bytes)
-    tfidf = tfidf_bm25_score   (question_text, response_text)
+    clr    = clarity_score      (question_text, response_text, wav_bytes)
+    qterms = question_terms_score(question_text, response_text)
+    # (tfidf_bm25_score still available but unused in composite)
 
-    # Composite (semantic, clarity, tfidf)
-    rel_w = {"semantic": .8, "clarity": .10, "tfidf": .10}
+    # Composite with explicit question-terms weight
+    rel_w = {"semantic": .7, "clarity": .15, "qterms": .15}
     question_score = (
-        sem * rel_w["semantic"] +
-        clr * rel_w["clarity"]   +
-        tfidf * rel_w["tfidf"]
+        sem    * rel_w["semantic"] +
+        clr    * rel_w["clarity"]  +
+        qterms * rel_w["qterms"]
     )
 
     # Final 0–10
@@ -277,19 +293,24 @@ def score_response(
     suggestions: List[Dict[str, str]] = [
         {
             "area": "Scoring Explanation",
-            "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
+            "feedback": (
+                f"Final score {score10}/10 "
+                f"(Keywords {keyword_score:.1f}%×{kw_w}, "
+                f"Relevance {question_score:.1f}%×{qt_w})."
+            )
         },
         {
             "area": "Relevance Breakdown",
             "feedback": (
-                f"Topic Fit: {sem:.1f}%  •  Clear Answer: {clr:.1f}%  •  "
-                f"Question Terms Used: {tfidf:.1f}%"
+                f"Topic Fit: {sem:.1f}%  •  "
+                f"Clarity: {clr:.1f}%  •  "
+                f"Question Terms Used: {qterms:.1f}%"
             )
         }
     ]
     if sem   < 70: suggestions.append({"area":"Topic Fit",           "feedback": pick_feedback("Topic Fit", sem)})
     if clr   < 70: suggestions.append({"area":"Clear Answer",        "feedback": pick_feedback("Clear Answer", clr)})
-    if tfidf < 70: suggestions.append({"area":"Question Terms Used", "feedback": pick_feedback("Question Terms Used", tfidf)})
+    if qterms< 70: suggestions.append({"area":"Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
     if missing:
         suggestions.append({"area":"Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
@@ -307,11 +328,10 @@ def score_response(
             "You are an expert interview coach. Be specific and actionable.\n"
             f"Question: “{question_text}”\n"
             f"Answer: “{response_text}”\n"
-            f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, tfidf={tfidf:.1f}%\n\n"
-            "Produce:\n"
-            "• 2–3 sentence summary of strengths (cite the candidate’s wording).\n"
-            "• 2–3 sentence recommendations for improvement (concrete next steps).\n"
-            "• 1 example of an improved phrasing.\n"
+            f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, question_terms={qterms:.1f}%\n\n"
+            "1) Summarize 2–3 strengths—mention which metric or wording was strong.\n"
+            "2) Give 2–3 concrete steps for improvement tied to this question.\n"
+            "3) Offer one example of improved phrasing.\n"
         )
         llm_out = dynamic_feedback(prompt)[0]["generated_text"].strip()
         logger.debug(f"LLM returned:\n{llm_out}")
@@ -336,7 +356,7 @@ def score_response(
         "relevance_breakdown": {
             "semantic": sem,
             "clarity":  clr,
-            "tfidf":    tfidf
+            "qterms":   qterms
         },
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
