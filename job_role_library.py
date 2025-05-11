@@ -271,6 +271,163 @@ job_role_library = {
     "EdTech Specialist": ["LMS integration", "educational software", "training delivery", "digital literacy", "tech support"]
     },
 
+    "Arts, Design & Creative Industries": {
+    "_keywords": ["visual design", "multimedia", "creativity", "storytelling", "production"],
+    "Graphic Designer": ["Adobe Illustrator", "Photoshop", "layout design", "branding", "print/digital media"],
+    "Art Director": ["creative direction", "team leadership", "campaign development", "branding strategy", "client briefs"],
+    "Illustrator": ["hand drawing", "digital illustration", "vector graphics", "storyboarding", "concept art"],
+    "Animator / Motion Graphics Designer": ["After Effects", "2D/3D animation", "storyboarding", "motion design", "video editing"],
+    "Video Editor": ["Adobe Premiere", "Final Cut Pro", "cutting", "color grading", "audio syncing"],
+    "Photographer": ["DSLR", "lighting setups", "photo editing", "composition", "studio/equipment handling"],
+    "Creative Director": ["brand development", "creative leadership", "cross-functional coordination", "visual storytelling", "strategic planning"]
+    },
+
+    "Media, Journalism & Publishing": {
+    "_keywords": ["reporting", "editing", "content creation", "publishing", "broadcasting"],
+    "Journalist / Reporter": ["news writing", "investigative journalism", "fact-checking", "interviews", "story development"],
+    "Editor / Copy Editor": ["proofreading", "grammar", "style guide adherence", "content revision", "publication prep"],
+    "Content Writer": ["SEO writing", "long-form content", "blogs", "articles", "content research"],
+    "Broadcast Producer": ["rundown planning", "live broadcasting", "studio coordination", "script editing", "segment production"],
+    "TV/Radio Host": ["public speaking", "audience engagement", "interviewing", "show scripting", "live moderation"]
+     },
+
+    "Sales & Business Development": {
+    "_keywords": ["lead generation", "client acquisition", "CRM", "sales strategy"],
+    "Sales Representative": ["cold calling", "client meetings", "product demos", "CRM systems", "sales target tracking"],
+    "Business Development Manager": ["market expansion", "partnership building", "sales strategy", "lead qualification", "pitching"],
+    "Account Executive": ["account management", "client retention", "sales forecasting", "negotiation", "pipeline management"],
+    "Sales Operations Analyst": ["sales analytics", "CRM maintenance", "data visualization", "quota tracking", "sales reporting"],
+    "Territory Sales Manager": ["regional sales", "route planning", "target setting", "dealer coordination", "field visits"]
+     },
+
+    "Real Estate & Property Management": {
+    "_keywords": ["property leasing", "valuation", "real estate law", "tenant management"],
+    "Real Estate Agent": ["property listings", "client viewings", "market trends", "negotiation", "contract closing"],
+    "Property Manager": ["tenant management", "maintenance coordination", "rent collection", "lease agreements", "vendor liaison"],
+    "Leasing Consultant": ["tour scheduling", "lease documentation", "amenities presentation", "client follow-ups", "vacancy reduction"],
+    "Real Estate Appraiser": ["property valuation", "market comparison", "report writing", "regulatory compliance", "site inspection"],
+    "Real Estate Analyst": ["market research", "financial modeling", "investment analysis", "property trends", "feasibility studies"]
+     },
+
+    "Agriculture & Environmental Science": {
+    "_keywords": ["sustainable farming", "conservation", "ecology", "agronomy"],
+    "Environmental Scientist": ["impact assessments", "field surveys", "sampling", "data analysis", "regulatory compliance"],
+    "Agricultural Engineer": ["irrigation systems", "crop machinery", "soil improvement", "farm planning", "equipment design"],
+    "Soil Scientist": ["soil testing", "fertility analysis", "erosion control", "land use planning", "pH/texture evaluation"],
+    "Agronomist": ["crop management", "plant breeding", "fertilizer use", "pest control", "yield optimization"],
+    "Climate Change Analyst": ["GHG modeling", "sustainability policy", "data simulation", "climate reports", "adaptation strategies"]
+     },
+
+    "Transportation & Automotive Services": {
+    "_keywords": ["vehicle maintenance", "transport logistics", "fleet management"],
+    "Automotive Technician": ["diagnostics", "engine repair", "brakes", "transmission", "vehicle inspections"],
+    "Fleet Manager": ["fleet scheduling", "maintenance planning", "driver coordination", "vehicle records", "route optimization"],
+    "Transportation Planner": ["traffic analysis", "route modeling", "urban mobility", "infrastructure planning", "GIS tools"],
+    "Vehicle Inspector": ["roadworthiness", "safety standards", "emission testing", "reporting", "regulatory compliance"]
+    },
+
+    "Public Sector & Government": {
+    "_keywords": ["policymaking", "regulation", "public administration", "civic services"],
+    "Policy Analyst": ["policy research", "impact evaluation", "legislation review", "brief writing", "stakeholder analysis"],
+    "Public Affairs Officer": ["press releases", "government relations", "media coordination", "public messaging", "crisis communication"],
+    "Government Relations Specialist": ["lobbying", "policy advocacy", "compliance", "regulatory tracking", "stakeholder engagement"],
+    "Urban Planner": ["zoning", "land use planning", "community development", "transport policy", "GIS analysis"],
+    "Civil Servant": ["administrative support", "program delivery", "report writing", "policy implementation", "citizen engagement"]
+    },
+
+    "Non-Profit & NGO": {
+    "_keywords": ["fundraising", "advocacy", "impact evaluation", "community outreach"],
+    "Program Coordinator": ["program implementation", "budget tracking", "stakeholder engagement", "reporting", "field coordination"],
+    "Grant Writer": ["proposal writing", "funding research", "donor reporting", "budget narratives", "impact storytelling"],
+    "Advocacy Officer": ["campaign planning", "policy lobbying", "issue research", "grassroots organizing", "media outreach"],
+    "NGO Operations Manager": ["team management", "partnerships", "compliance", "funding oversight", "strategic planning"],
+    "Fundraising Specialist": ["donor engagement", "fundraising campaigns", "CRM tools", "event planning", "grant applications"]
+    },
+
+    "Sports & Fitness": {
+    "_keywords": ["athletic performance", "physical training", "sports science"],
+    "Personal Trainer": ["workout planning", "client assessment", "fitness goals", "diet guidance", "injury prevention"],
+    "Athletic Coach": ["training schedules", "team management", "performance review", "skill development", "tactical planning"],
+    "Sports Therapist": ["injury diagnosis", "treatment planning", "rehab exercises", "sports massage", "movement analysis"],
+    "Fitness Instructor": ["group classes", "fitness techniques", "equipment use", "client engagement", "safety monitoring"],
+    "Sports Nutritionist": ["diet planning", "macronutrient balance", "hydration strategies", "performance diets", "supplement guidance"]
+    },
+
+    "Energy & Utilities": {
+    "_keywords": ["power generation", "utility operations", "grid systems"],
+    "Energy Analyst": ["energy forecasting", "cost modeling", "usage analysis", "renewable integration", "policy review"],
+    "Power Plant Operator": ["turbine control", "monitoring systems", "safety protocols", "load balancing", "maintenance checks"],
+    "Utility Planner": ["demand forecasting", "infrastructure planning", "outage scheduling", "asset management", "GIS tools"],
+    "Renewable Energy Technician": ["solar panel installation", "wind turbine maintenance", "battery systems", "inverter setup", "site inspections"]
+    },
+
+    "Retail & E-Commerce": {
+    "_keywords": ["merchandising", "point of sale", "inventory", "online sales"],
+    "Retail Manager": ["store operations", "staff supervision", "sales tracking", "visual merchandising", "customer experience"],
+    "E-commerce Specialist": ["online storefronts", "product listings", "order management", "SEO", "conversion optimization"],
+    "Merchandiser": ["stock planning", "product display", "sales analysis", "trend forecasting", "pricing strategy"],
+    "Store Operations Coordinator": ["inventory control", "staff scheduling", "POS systems", "compliance checks", "store audits"]
+    },
+
+    "Architecture & Urban Planning": {
+    "_keywords": ["architectural design", "urban planning", "zoning", "building codes", "CAD"],
+    "Architect": ["building design", "AutoCAD", "Revit", "construction drawings", "zoning laws"],
+    "Urban Planner": ["land use planning", "GIS", "transportation planning", "zoning regulations", "community engagement"],
+    "Landscape Architect": ["site planning", "planting design", "CAD", "sustainability", "public space design"],
+    "Interior Designer": ["space planning", "material selection", "3D rendering", "color theory", "lighting design"]
+    },
+
+    "Telecommunications": {
+    "_keywords": ["network infrastructure", "broadband", "fiber optics", "telephony", "VoIP"],
+    "Telecom Engineer": ["network installation", "fiber optics", "signal transmission", "BTS", "switching systems"],
+    "Network Planner": ["capacity planning", "network rollout", "site surveys", "GIS mapping", "frequency allocation"],
+    "RF Engineer": ["radio frequency planning", "signal optimization", "drive testing", "coverage maps", "LTE/5G"]
+    },
+
+    "Insurance": {
+    "_keywords": ["underwriting", "claims", "risk analysis", "policy management", "actuarial science"],
+    "Insurance Underwriter": ["risk assessment", "policy pricing", "loss ratios", "reinsurance", "compliance checks"],
+    "Claims Adjuster": ["claim investigation", "settlements", "policy terms", "fraud detection", "report writing"],
+    "Actuary": ["statistical modeling", "mortality tables", "risk quantification", "forecasting", "pricing models"],
+    "Insurance Sales Agent": ["policy explanation", "client acquisition", "CRM systems", "premium calculation"]
+    },
+
+    "Arts & Performing Arts": {
+    "_keywords": ["performance", "theatre", "visual arts", "stagecraft", "creativity"],
+    "Actor/Performer": ["stage performance", "script interpretation", "voice modulation", "auditioning", "improvisation"],
+    "Theatre Director": ["script analysis", "casting", "rehearsal scheduling", "stage direction", "production oversight"],
+    "Stage Manager": ["backstage coordination", "cue management", "rehearsal tracking", "set logistics", "prop handling"],
+    "Visual Artist": ["drawing", "painting", "sculpture", "concept development", "gallery exhibitions"]
+    },
+
+    "Maritime & Shipping": {
+    "_keywords": ["vessel operations", "shipping logistics", "marine engineering", "port management"],
+    "Marine Engineer": ["engine maintenance", "fuel systems", "vessel propulsion", "IMO standards", "troubleshooting"],
+    "Ship Captain": ["navigation", "crew management", "voyage planning", "compliance", "weather routing"],
+    "Port Operations Manager": ["cargo handling", "berthing coordination", "logistics oversight", "customs clearance"]
+    },
+
+    "Gaming & Game Development": {
+    "_keywords": ["game design", "3D modeling", "game engines", "UI/UX", "interactive storytelling"],
+    "Game Designer": ["game mechanics", "storyboarding", "level design", "playtesting", "prototyping"],
+    "Game Developer": ["Unity", "Unreal Engine", "C#", "game physics", "asset integration"],
+    "3D Game Artist": ["modeling", "texturing", "animation", "Maya", "Blender"]
+    },
+
+    "Fashion & Apparel": {
+    "_keywords": ["fashion design", "textiles", "garment production", "trend forecasting", "styling"],
+    "Fashion Designer": ["sketching", "fabric selection", "pattern making", "sewing techniques", "fashion shows"],
+    "Textile Designer": ["fabric patterns", "weaving", "digital textile printing", "color theory"],
+    "Fashion Buyer": ["trend analysis", "vendor negotiation", "inventory planning", "seasonal buying"]
+    },
+
+    "Mining & Extraction": {
+    "_keywords": ["mineral extraction", "geology", "drilling", "mine safety", "ore processing"],
+    "Mining Engineer": ["mine planning", "drilling operations", "safety inspections", "resource estimation"],
+    "Geologist": ["rock sampling", "core logging", "geophysical surveys", "mineral analysis"],
+    "Drilling Supervisor": ["rig management", "drill planning", "equipment checks", "safety compliance"]
+    }
+
 
 
 }

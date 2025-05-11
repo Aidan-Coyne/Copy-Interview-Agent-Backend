@@ -9,39 +9,29 @@ import time
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
 
-# ─── Vosk for offline ASR ───
 from vosk import Model, KaldiRecognizer
-
-# ─── spaCy, Transformers & ONNX for scoring ───
 import spacy
 from fuzzywuzzy import fuzz
 from rank_bm25 import BM25Okapi
 from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
 import numpy as np
-
-# ─── VAD for pause detection ───
 import webrtcvad
 
-# ─── Logging ───
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# ─── Load Vosk model once at import ───
 VOSK_MODEL_PATH = "/app/models/vosk-model-small-en-us-0.15"
 vosk_model = Model(VOSK_MODEL_PATH)
 logger.info(f"✅ Loaded Vosk model from {VOSK_MODEL_PATH}")
 
-# ─── ONNX semantic model ───
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 session = ort.InferenceSession(MODEL_PATH)
 
-# ─── NLI & spaCy ───
 nli = pipeline("text-classification", model="roberta-large-mnli")
 nlp = spacy.load("en_core_web_sm")
 
-# ─── Dynamic feedback LLM (flan-t5-base) ───
 dynamic_feedback = pipeline(
     "text2text-generation",
     model="google/flan-t5-base",
@@ -58,11 +48,8 @@ class TranscriptionError(Exception):
 
 def convert_to_wav(audio_data: bytes) -> bytes:
     proc = subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"
-        ],
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+         "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
         input=audio_data,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -112,28 +99,15 @@ def get_relevant_keywords(
     return relevant, qtype, None
 
 def question_terms_score(q: str, r: str) -> float:
-    q_doc = nlp(q)
-    q_tokens = {
-        t.lemma_.lower()
-        for t in q_doc
-        if not t.is_stop and t.is_alpha and len(t.text) > 2
-    }
+    q_tokens = {t.lemma_.lower() for t in nlp(q) if not t.is_stop and t.is_alpha and len(t.text) > 2}
+    r_lemmas = {t.lemma_.lower() for t in nlp(r)}
     if not q_tokens:
         return 0.0
-    r_lemmas = {t.lemma_.lower() for t in nlp(r)}
     matches = sum(1 for tok in q_tokens if tok in r_lemmas)
-    score = matches / len(q_tokens) * 100
-    logger.debug(f"Question-terms use: {matches}/{len(q_tokens)} → {score:.1f}%")
-    return score
+    return matches / len(q_tokens) * 100
 
 def encode(text: str) -> np.ndarray:
-    tokens = tokenizer(
-        text,
-        return_tensors="np",
-        truncation=True,
-        padding="max_length",
-        max_length=128
-    )
+    tokens = tokenizer(text, return_tensors="np", truncation=True, padding="max_length", max_length=128)
     ort_inputs = {k: tokens[k] for k in ("input_ids", "attention_mask")}
     outputs = session.run(None, ort_inputs)
     last_hidden = outputs[0]
@@ -146,22 +120,15 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 def semantic_similarity(q: str, r: str) -> float:
-    vec_q = encode(q)
-    vec_r = encode(r)
-    score = ((cosine_similarity(vec_q, vec_r) + 1) / 2) * 100
-    logger.debug(f"Semantic similarity: {score:.1f}%")
-    return score
+    return ((cosine_similarity(encode(q), encode(r)) + 1) / 2) * 100
 
 def detect_long_pauses(wav_bytes: bytes) -> float:
     vad = webrtcvad.Vad(2)
     try:
         wf = wave.open(BytesIO(wav_bytes), 'rb')
+        if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+            return 0.0
     except Exception as e:
-        logger.warning(f"Pause detection skipped (could not read WAV): {e}")
-        return 0.0
-
-    if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
-        logger.warning("Pause detection requires 16 kHz mono PCM; skipping")
         return 0.0
 
     frame_ms = 30
@@ -174,20 +141,13 @@ def detect_long_pauses(wav_bytes: bytes) -> float:
             speech += 1
         frames += 1
 
-    if frames == 0:
-        return 0.0
-    silence_ratio = 1 - (speech / frames)
-    logger.debug(f"Detected silence ratio: {silence_ratio:.2f}")
-    return silence_ratio
+    return 1 - (speech / frames) if frames else 0.0
 
 def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
     out = nli(f"{q} </s></s> {r}")
     ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
     entail = (ent["score"] * 100) if ent else 0.0
-    pause_ratio = detect_long_pauses(wav_bytes)
-    clarity = entail * (1 - pause_ratio)
-    logger.debug(f"Clarity: entail={entail:.1f}%, pause_penalty={pause_ratio:.2f}, final={clarity:.1f}%")
-    return clarity
+    return entail * (1 - detect_long_pauses(wav_bytes))
 
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
@@ -229,11 +189,7 @@ def score_response(
     start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
 
-    tokens = [
-        t.lemma_.lower().strip(string.punctuation)
-        for t in nlp(response_text)
-        if not t.is_stop and len(t.text) > 2
-    ]
+    tokens = [t.lemma_.lower().strip(string.punctuation) for t in nlp(response_text) if not t.is_stop and len(t.text) > 2]
     kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
     matched, missing = [], []
     for kw in kws:
@@ -241,31 +197,20 @@ def score_response(
         (matched if pct >= 80 else missing).append(kw)
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
-    sem    = semantic_similarity(question_text, response_text)
-    clr    = clarity_score(question_text, response_text, wav_bytes)
+    sem = semantic_similarity(question_text, response_text)
+    clr = clarity_score(question_text, response_text, wav_bytes)
     qterms = question_terms_score(question_text, response_text)
 
     rel_w = {"semantic": .70, "clarity": .15, "qterms": .15}
-    question_score = (
-        sem * rel_w["semantic"] +
-        clr * rel_w["clarity"] +
-        qterms * rel_w["qterms"]
-    )
-
+    question_score = sem * rel_w["semantic"] + clr * rel_w["clarity"] + qterms * rel_w["qterms"]
     base_w = {"technical": (.4, .6), "behavioral": (.2, .8), "situational": (.2, .8)}
     kw_w, qt_w = base_w.get(question_type, (0.2, 0.8))
     final_num = deep_round(kw_w * keyword_score + qt_w * question_score, 2)
     score10 = round(final_num / 10, 1)
 
     suggestions = [
-        {
-            "area": "Scoring Explanation",
-            "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
-        },
-        {
-            "area": "Relevance Breakdown",
-            "feedback": f"Topic Fit: {sem:.1f}%  •  Clarity: {clr:.1f}%  •  Question Terms Used: {qterms:.1f}%"
-        }
+        {"area": "Scoring Explanation", "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."},
+        {"area": "Relevance Breakdown", "feedback": f"Topic Fit: {sem:.1f}%  •  Clarity: {clr:.1f}%  •  Question Terms Used: {qterms:.1f}%"}
     ]
     if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
     if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
@@ -281,7 +226,6 @@ def score_response(
     if len(response_text.split()) < 20:
         suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
 
-    # ─── IMPROVED DYNAMIC FEEDBACK ───
     try:
         prompt = f"""
 You are an interview coach. A candidate just answered the question below.
@@ -303,29 +247,30 @@ Return exactly:
 2. [improvement suggestion]
 """
         llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
-        logger.debug(f"LLM returned:\n{llm_out}")
-        for line in llm_out.splitlines():
-            clean = line.strip(" •")
-            if clean:
-                suggestions.append({"area": "Personalized Feedback", "feedback": clean})
+        logger.debug(f"LLM returned raw output:\n{llm_out}")
+
+        bullets = [line.strip("• ").strip() for line in llm_out.splitlines() if line.strip()]
+        valid_bullets = [b for b in bullets if b and not b.strip().isdigit()]
+        if not valid_bullets:
+            suggestions.append({
+                "area": "Personalized Feedback",
+                "feedback": "Could not extract meaningful personalized feedback. Try speaking more clearly or giving a fuller answer."
+            })
+        else:
+            for item in valid_bullets[:2]:
+                suggestions.append({"area": "Personalized Feedback", "feedback": item})
+
     except Exception:
         logger.exception("Failed to generate dynamic feedback")
 
-    elapsed = time.time() - start_time
-    logger.info(f"✅ Evaluation pipeline completed in {elapsed:.2f}s")
-    logger.debug(f"Full suggestions list: {suggestions}")
-
+    logger.info(f"✅ Evaluation pipeline completed in {time.time() - start_time:.2f}s")
     return {
         "score": score10,
         "clarity_tier": get_tier(clr),
         "keyword_matches": matched,
         "expected_keywords": kws,
         "skills_shown": extract_skills_from_response(response_text),
-        "relevance_breakdown": {
-            "semantic": sem,
-            "clarity": clr,
-            "qterms": qterms
-        },
+        "relevance_breakdown": {"semantic": sem, "clarity": clr, "qterms": qterms},
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }
