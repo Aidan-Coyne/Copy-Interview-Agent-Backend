@@ -5,14 +5,14 @@ import string
 import logging
 import subprocess
 import random
-import time                              # ← for timing
+import time
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
 
-# ─── Vosk for offline ASR ─────────────────────────────────────────────────────
+# ─── Vosk for offline ASR ───
 from vosk import Model, KaldiRecognizer
 
-# ─── spaCy, Transformers & ONNX for scoring ─────────────────────────────────
+# ─── spaCy, Transformers & ONNX for scoring ───
 import spacy
 from fuzzywuzzy import fuzz
 from rank_bm25 import BM25Okapi
@@ -20,28 +20,28 @@ from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
 import numpy as np
 
-# ─── VAD for pause detection ─────────────────────────────────────────────────
+# ─── VAD for pause detection ───
 import webrtcvad
 
-# ─── Logging ─────────────────────────────────────────────────────────────────
+# ─── Logging ───
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# ─── Load Vosk model once at import ──────────────────────────────────────────
+# ─── Load Vosk model once at import ───
 VOSK_MODEL_PATH = "/app/models/vosk-model-small-en-us-0.15"
 vosk_model = Model(VOSK_MODEL_PATH)
 logger.info(f"✅ Loaded Vosk model from {VOSK_MODEL_PATH}")
 
-# ─── ONNX semantic model ─────────────────────────────────────────────────────
+# ─── ONNX semantic model ───
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 session = ort.InferenceSession(MODEL_PATH)
 
-# ─── NLI & spaCy ─────────────────────────────────────────────────────────────
+# ─── NLI & spaCy ───
 nli = pipeline("text-classification", model="roberta-large-mnli")
 nlp = spacy.load("en_core_web_sm")
 
-# ─── Dynamic feedback LLM ────────────────────────────────────────────────────
+# ─── Dynamic feedback LLM ───
 dynamic_feedback = pipeline(
     "text2text-generation",
     model="google/flan-t5-small",
@@ -56,7 +56,6 @@ def deep_round(value: float, ndigits: int) -> float:
 class TranscriptionError(Exception):
     pass
 
-# ─── In-memory FFmpeg convert ─────────────────────────────────────────────────
 def convert_to_wav(audio_data: bytes) -> bytes:
     proc = subprocess.run(
         [
@@ -71,7 +70,6 @@ def convert_to_wav(audio_data: bytes) -> bytes:
     )
     return proc.stdout
 
-# ─── Vosk-based transcription ─────────────────────────────────────────────────
 def transcribe_audio(audio_data: bytes) -> str:
     start = time.time()
     rec = KaldiRecognizer(vosk_model, 16000)
@@ -113,7 +111,6 @@ def get_relevant_keywords(
         qtype = "general"
     return relevant, qtype, None
 
-# ─── QUESTION-TERMS SCORING ───────────────────────────────────────────────────
 def question_terms_score(q: str, r: str) -> float:
     q_doc = nlp(q)
     q_tokens = {
@@ -129,7 +126,6 @@ def question_terms_score(q: str, r: str) -> float:
     logger.debug(f"Question-terms use: {matches}/{len(q_tokens)} → {score:.1f}%")
     return score
 
-# ─── SEMANTIC EMBEDDING ───────────────────────────────────────────────────────
 def encode(text: str) -> np.ndarray:
     tokens = tokenizer(
         text,
@@ -156,7 +152,6 @@ def semantic_similarity(q: str, r: str) -> float:
     logger.debug(f"Semantic similarity: {score:.1f}%")
     return score
 
-# ─── LONG-PAUSE DETECTION (WebRTC VAD) ────────────────────────────────────────
 def detect_long_pauses(wav_bytes: bytes) -> float:
     vad = webrtcvad.Vad(2)
     try:
@@ -195,7 +190,6 @@ def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
     logger.debug(f"Clarity: entail={entail:.1f}%, pause_penalty={pause_ratio:.2f}, final={clarity:.1f}%")
     return clarity
 
-# ─── TEMPLATES ────────────────────────────────────────────────────────────────
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
     for thresh, name in TIERS:
@@ -225,19 +219,17 @@ def pick_feedback(area: str, score: float) -> str:
     tier = get_tier(score)
     return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
 
-# ─── MAIN SCORING + DYNAMIC FEEDBACK ─────────────────────────────────────────
 def score_response(
     response_text: str,
     question_text: str,
     relevant_keywords: List[str],
     question_type: str,
     company_sector: Optional[str] = None,
-    wav_bytes: bytes = b""                    # ← now accepted here
+    wav_bytes: bytes = b""
 ) -> Dict[str, Any]:
     start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
 
-    # Keyword matching
     tokens = [
         t.lemma_.lower().strip(string.punctuation)
         for t in nlp(response_text)
@@ -250,12 +242,10 @@ def score_response(
         (matched if pct >= 80 else missing).append(kw)
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
-    # Subscores
     sem    = semantic_similarity(question_text, response_text)
     clr    = clarity_score(question_text, response_text, wav_bytes)
     qterms = question_terms_score(question_text, response_text)
 
-    # Composite weights
     rel_w = {"semantic": .70, "clarity": .15, "qterms": .15}
     question_score = (
         sem    * rel_w["semantic"] +
@@ -263,13 +253,11 @@ def score_response(
         qterms * rel_w["qterms"]
     )
 
-    # Final 0–10
     base_w = {"technical": (.4, .6), "behavioral": (.2, .8), "situational": (.2, .8)}
     kw_w, qt_w = base_w.get(question_type, (0.2, 0.8))
     final_num = deep_round(kw_w * keyword_score + qt_w * question_score, 2)
     score10   = round(final_num / 10, 1)
 
-    # Static suggestions
     suggestions: List[Dict[str, str]] = [
         {
             "area": "Scoring Explanation",
@@ -302,19 +290,26 @@ def score_response(
     if len(response_text.split()) < 20:
         suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
 
-    # ─── DYNAMIC FEEDBACK: exactly 3 bullets ───────────────────────────────────
+    # ─── DYNAMIC FEEDBACK: exactly 3 bullets ───
     try:
-        prompt = "\n".join([
-            f"Question: “{question_text}”",
-            f"Answer: “{response_text}”",
-            f"Metrics: semantic={sem:.1f}%, clarity={clr:.1f}%, question_terms={qterms:.1f}%", 
-            "",
-            "Provide exactly three bullet points:",
-            "1. Strengths: identify 1–2 concrete things the candidate did well, citing their wording.",
-            "2. Improvements: give 1–2 actionable suggestions for this specific answer.",
-            "3. Summary: one line summarising all the feedback.",
-        ])
-        llm_out = dynamic_feedback(prompt)[0]["generated_text"].strip()
+        prompt = f"""
+You are an interview coach. A candidate just answered the question below.
+
+QUESTION:
+"{question_text}"
+
+ANSWER:
+"{response_text}"
+
+INSTRUCTIONS:
+Give 3 bullet points.
+1. What part of the answer was helpful, relevant, or strong? Quote a phrase if possible.
+2. What should they improve? Give 1–2 clear, direct suggestions for this question.
+3. Write a one-line summary combining both praise and a tip.
+
+Only return the 3 numbered points. Be brief, specific, and encouraging.
+"""
+        llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
         logger.debug(f"LLM returned:\n{llm_out}")
 
         for line in llm_out.splitlines():
@@ -324,7 +319,6 @@ def score_response(
     except Exception:
         logger.exception("Failed to generate dynamic feedback")
 
-    # ─── Final timing & dump ───────────────────────────────────────────────────
     elapsed = time.time() - start_time
     logger.info(f"✅ Evaluation pipeline completed in {elapsed:.2f}s")
     logger.debug(f"Full suggestions list: {suggestions}")
