@@ -184,7 +184,6 @@ def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
     out = nli(f"{q} </s></s> {r}")
     ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
     entail = (ent["score"] * 100) if ent else 0.0
-
     pause_ratio = detect_long_pauses(wav_bytes)
     clarity = entail * (1 - pause_ratio)
     logger.debug(f"Clarity: entail={entail:.1f}%, pause_penalty={pause_ratio:.2f}, final={clarity:.1f}%")
@@ -248,49 +247,40 @@ def score_response(
 
     rel_w = {"semantic": .70, "clarity": .15, "qterms": .15}
     question_score = (
-        sem    * rel_w["semantic"] +
-        clr    * rel_w["clarity"]  +
+        sem * rel_w["semantic"] +
+        clr * rel_w["clarity"] +
         qterms * rel_w["qterms"]
     )
 
     base_w = {"technical": (.4, .6), "behavioral": (.2, .8), "situational": (.2, .8)}
     kw_w, qt_w = base_w.get(question_type, (0.2, 0.8))
     final_num = deep_round(kw_w * keyword_score + qt_w * question_score, 2)
-    score10   = round(final_num / 10, 1)
+    score10 = round(final_num / 10, 1)
 
-    suggestions: List[Dict[str, str]] = [
+    suggestions = [
         {
             "area": "Scoring Explanation",
-            "feedback": (
-                f"Final score {score10}/10 "
-                f"(Keywords {keyword_score:.1f}%×{kw_w}, "
-                f"Relevance {question_score:.1f}%×{qt_w})."
-            )
+            "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."
         },
         {
             "area": "Relevance Breakdown",
-            "feedback": (
-                f"Topic Fit: {sem:.1f}%  •  "
-                f"Clarity: {clr:.1f}%  •  "
-                f"Question Terms Used: {qterms:.1f}%"
-            )
+            "feedback": f"Topic Fit: {sem:.1f}%  •  Clarity: {clr:.1f}%  •  Question Terms Used: {qterms:.1f}%"
         }
     ]
-    if sem    < 70: suggestions.append({"area":"Topic Fit",           "feedback": pick_feedback("Topic Fit", sem)})
-    if clr    < 70: suggestions.append({"area":"Clear Answer",        "feedback": pick_feedback("Clear Answer", clr)})
-    if qterms < 70: suggestions.append({"area":"Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
+    if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
+    if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
+    if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
     if missing:
-        suggestions.append({"area":"Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
+        suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
-        suggestions.append({"area":"Behavioral Structure","feedback":"Use STAR (Situation, Task, Action, Result)."})
+        suggestions.append({"area": "Behavioral Structure", "feedback": "Use STAR (Situation, Task, Action, Result)."})
     elif question_type == "situational":
-        suggestions.append({"area":"Situational Strategy","feedback":"Outline your reasoning steps clearly."})
+        suggestions.append({"area": "Situational Strategy", "feedback": "Outline your reasoning steps clearly."})
     elif question_type == "technical":
-        suggestions.append({"area":"Technical Depth","feedback":"Include specific tools or concrete examples."})
+        suggestions.append({"area": "Technical Depth", "feedback": "Include specific tools or concrete examples."})
     if len(response_text.split()) < 20:
-        suggestions.append({"area":"Detail & Depth","feedback":"Expand with examples or explanations."})
+        suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
 
-    # ─── DYNAMIC FEEDBACK: exactly 3 bullets ───
     try:
         prompt = f"""
 You are an interview coach. A candidate just answered the question below.
@@ -301,17 +291,18 @@ QUESTION:
 ANSWER:
 "{response_text}"
 
-INSTRUCTIONS:
-Give 2 bullet points.
-1. What part of the answer was helpful, relevant, or strong? Quote a phrase if possible.
-2. What should they improve? Give 1–2 clear, direct suggestions for answering this question.
+Your task is to provide **2 helpful and specific bullet points**:
+1. Highlight something strong or relevant in the answer. Quote the exact phrase from the answer if possible, and explain why it's good.
+2. Suggest how they could improve this specific answer. Be direct and specific—suggest missing details, better examples, or structure.
 
+Make sure the feedback is focused **only on this question and answer**. Be concise, helpful, and constructive.
 
-Only return the 2 numbered points. Be brief, specific, and encouraging.
+Return exactly:
+1. [positive feedback]
+2. [improvement suggestion]
 """
         llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
         logger.debug(f"LLM returned:\n{llm_out}")
-
         for line in llm_out.splitlines():
             clean = line.strip(" •")
             if clean:
@@ -331,8 +322,8 @@ Only return the 2 numbered points. Be brief, specific, and encouraging.
         "skills_shown": extract_skills_from_response(response_text),
         "relevance_breakdown": {
             "semantic": sem,
-            "clarity":  clr,
-            "qterms":   qterms
+            "clarity": clr,
+            "qterms": qterms
         },
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
