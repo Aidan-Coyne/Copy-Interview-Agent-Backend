@@ -38,8 +38,8 @@ nli_model = "roberta-large-mnli"
 AutoTokenizer.from_pretrained(nli_model)
 AutoModelForSequenceClassification.from_pretrained(nli_model)
 
-# → small feedback LLM (cache)
-feedback_model = "google/flan-t5-small"
+# → feedback LLM (FLAN-T5 base)
+feedback_model = "google/flan-t5-base"
 AutoTokenizer.from_pretrained(feedback_model)
 AutoModelForSeq2SeqLM.from_pretrained(feedback_model)
 

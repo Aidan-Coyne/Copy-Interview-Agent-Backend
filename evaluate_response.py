@@ -41,11 +41,11 @@ session = ort.InferenceSession(MODEL_PATH)
 nli = pipeline("text-classification", model="roberta-large-mnli")
 nlp = spacy.load("en_core_web_sm")
 
-# ─── Dynamic feedback LLM ───
+# ─── Dynamic feedback LLM (flan-t5-base) ───
 dynamic_feedback = pipeline(
     "text2text-generation",
-    model="google/flan-t5-small",
-    tokenizer="google/flan-t5-small",
+    model="google/flan-t5-base",
+    tokenizer="google/flan-t5-base",
     max_length=512,
     do_sample=False
 )
@@ -302,12 +302,12 @@ ANSWER:
 "{response_text}"
 
 INSTRUCTIONS:
-Give 3 bullet points.
+Give 2 bullet points.
 1. What part of the answer was helpful, relevant, or strong? Quote a phrase if possible.
-2. What should they improve? Give 1–2 clear, direct suggestions for this question.
-3. Write a one-line summary combining both praise and a tip.
+2. What should they improve? Give 1–2 clear, direct suggestions for answering this question.
 
-Only return the 3 numbered points. Be brief, specific, and encouraging.
+
+Only return the 2 numbered points. Be brief, specific, and encouraging.
 """
         llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
         logger.debug(f"LLM returned:\n{llm_out}")
