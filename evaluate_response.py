@@ -52,22 +52,12 @@ class TranscriptionError(Exception):
     pass
 
 def convert_to_wav(audio_data: bytes) -> bytes:
-    proc = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
-         "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
-        input=audio_data,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=True
-    )
-    return proc.stdout
-
-def denoise_audio(raw_bytes: bytes) -> bytes:
+    # Merged: format conversion + denoising
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
          "-af", "highpass=f=200, lowpass=f=3000",
          "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
-        input=raw_bytes,
+        input=audio_data,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         check=True
