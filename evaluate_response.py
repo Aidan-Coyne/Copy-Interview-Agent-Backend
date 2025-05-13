@@ -22,7 +22,8 @@ import webrtcvad
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-VOSK_MODEL_PATH = "/app/models/vosk-model-en-us-0.22-lgraph"
+# ✅ Reverted to smaller, faster model
+VOSK_MODEL_PATH = "/app/models/vosk-model-small-en-us-0.15"
 vosk_model = Model(VOSK_MODEL_PATH)
 logger.info(f"✅ Loaded Vosk model from {VOSK_MODEL_PATH}")
 
@@ -52,7 +53,7 @@ class TranscriptionError(Exception):
     pass
 
 def convert_to_wav(audio_data: bytes) -> bytes:
-    # Merged: format conversion + denoising
+    # Includes denoising via FFmpeg filters
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
          "-af", "highpass=f=200, lowpass=f=3000",
@@ -178,7 +179,7 @@ def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
 
     pause_penalty = detect_long_pauses(wav_bytes)
     filler_count = count_filler_words(r)
-    filler_penalty = min(0.05 * filler_count, 0.25)  # Max 25% deduction
+    filler_penalty = min(0.05 * filler_count, 0.25)
 
     clarity = entail * (1 - pause_penalty)
     adjusted = clarity * (1 - filler_penalty)

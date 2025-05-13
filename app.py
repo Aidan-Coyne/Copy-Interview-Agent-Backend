@@ -227,6 +227,43 @@ async def evaluate_audio_response(
         "response_audio_url": response_url
     })
 
+@app.post("/re_evaluate_response/")
+async def re_evaluate_response(
+    session_id: str = Form(...),
+    question_index: int = Form(...),
+    edited_response: str = Form(...)
+):
+    if session_id not in session_data:
+        raise HTTPException(status_code=400, detail="Session not found.")
+
+    session = session_data[session_id]
+    questions = session.get("questions", [])
+    if question_index >= len(questions):
+        raise HTTPException(status_code=400, detail="Invalid question index.")
+
+    question_data = questions[question_index]
+    relevant_keywords, question_type, company_sector = evaluate_response.get_relevant_keywords(
+        question_data,
+        session["job_role"],
+        session["company_name"],
+        session["company_info"]
+    )
+
+    result = evaluate_response.score_response(
+        edited_response,
+        question_data["question_text"],
+        relevant_keywords,
+        question_type,
+        company_sector,
+        wav_bytes=b""  # Skip audio penalties during manual correction
+    )
+
+    return JSONResponse(content={
+        "feedback": result,
+        "transcribed_text": edited_response,
+        "manual_override": True
+    })
+
 @app.post("/end_session/{session_id}")
 def end_session(session_id: str):
     if session_id in session_data:

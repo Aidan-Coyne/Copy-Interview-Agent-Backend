@@ -47,12 +47,12 @@ AutoModelForSeq2SeqLM.from_pretrained(feedback_model)
 _ = onnxruntime.get_device()
 EOF
 
-# 5. Download & unpack Vosk upgraded model (en-us-0.22-lgraph)
+# 5. Download & unpack Vosk SMALL model (faster)
 RUN mkdir -p /app/models && \
-    wget -qO /app/models/vosk-model-en-us-0.22-lgraph.zip \
-      https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip && \
-    unzip -q /app/models/vosk-model-en-us-0.22-lgraph.zip -d /app/models && \
-    rm /app/models/vosk-model-en-us-0.22-lgraph.zip
+    wget -qO /app/models/vosk-model-small-en-us-0.15.zip \
+      https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip && \
+    unzip -q /app/models/vosk-model-small-en-us-0.15.zip -d /app/models && \
+    rm /app/models/vosk-model-small-en-us-0.15.zip
 
 # ─── STAGE 2: runtime image ──────────────────────────────────────────────────
 FROM python:3.12-slim
