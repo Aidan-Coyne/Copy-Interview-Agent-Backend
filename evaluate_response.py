@@ -6,6 +6,7 @@ import logging
 import subprocess
 import random
 import time
+import re
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -21,7 +22,7 @@ import webrtcvad
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-VOSK_MODEL_PATH = "/app/models/vosk-model-small-en-us-0.15"
+VOSK_MODEL_PATH = "/app/models/vosk-model-en-us-0.22-lgraph"
 vosk_model = Model(VOSK_MODEL_PATH)
 logger.info(f"✅ Loaded Vosk model from {VOSK_MODEL_PATH}")
 
@@ -40,6 +41,10 @@ dynamic_feedback = pipeline(
     do_sample=False
 )
 
+FILLER_WORDS = {
+    "um", "uh", "like", "you know", "i mean", "basically", "sort of", "kind of", "er", "erm"
+}
+
 def deep_round(value: float, ndigits: int) -> float:
     return round(value, ndigits)
 
@@ -57,18 +62,51 @@ def convert_to_wav(audio_data: bytes) -> bytes:
     )
     return proc.stdout
 
+def denoise_audio(raw_bytes: bytes) -> bytes:
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+         "-af", "highpass=f=200, lowpass=f=3000",
+         "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+        input=raw_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True
+    )
+    return proc.stdout
+
 def transcribe_audio(audio_data: bytes) -> str:
     start = time.time()
-    rec = KaldiRecognizer(vosk_model, 16000)
-    rec.SetWords(True)
-    rec.AcceptWaveform(audio_data)
-    result_json = rec.Result()
-    text = json.loads(result_json).get("text", "")
+    try:
+        wf = wave.open(BytesIO(audio_data), 'rb')
+    except Exception:
+        raise TranscriptionError("Invalid audio format.")
+
+    if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+        raise TranscriptionError("Audio must be mono, 16-bit, 16kHz WAV format.")
+
+    rec = KaldiRecognizer(vosk_model, wf.getframerate())
+    results = []
+
+    while True:
+        buf = wf.readframes(4000)
+        if len(buf) == 0:
+            break
+        if rec.AcceptWaveform(buf):
+            part = json.loads(rec.Result())
+            results.append(part.get("text", ""))
+    results.append(json.loads(rec.FinalResult()).get("text", ""))
+    text = " ".join(results).strip()
+
     elapsed = time.time() - start
     logger.info(f"⏱ Vosk transcription took {elapsed:.2f}s")
     if not text:
         raise TranscriptionError("Could not understand audio. Please speak clearly.")
     return text.lower()
+
+def count_filler_words(text: str) -> int:
+    normalized = re.sub(r"[^a-zA-Z\s]", "", text.lower())
+    words = normalized.split()
+    return sum(1 for word in words if word in FILLER_WORDS)
 
 def extract_skills_from_response(response_text: str) -> List[str]:
     doc = nlp(response_text)
@@ -128,7 +166,7 @@ def detect_long_pauses(wav_bytes: bytes) -> float:
         wf = wave.open(BytesIO(wav_bytes), 'rb')
         if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
             return 0.0
-    except Exception as e:
+    except Exception:
         return 0.0
 
     frame_ms = 30
@@ -147,7 +185,14 @@ def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
     out = nli(f"{q} </s></s> {r}")
     ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
     entail = (ent["score"] * 100) if ent else 0.0
-    return entail * (1 - detect_long_pauses(wav_bytes))
+
+    pause_penalty = detect_long_pauses(wav_bytes)
+    filler_count = count_filler_words(r)
+    filler_penalty = min(0.05 * filler_count, 0.25)  # Max 25% deduction
+
+    clarity = entail * (1 - pause_penalty)
+    adjusted = clarity * (1 - filler_penalty)
+    return adjusted
 
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
@@ -215,6 +260,8 @@ def score_response(
     if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
     if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
     if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
+    if count_filler_words(response_text) > 0:
+        suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce filler words like 'uh', 'like', or 'you know' to improve clarity."})
     if missing:
         suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":

@@ -197,7 +197,8 @@ async def evaluate_audio_response(
     logger.info(f"⏱ firebase.upload took {(time.time() - upload_start):.2f}s")
 
     convert_start = time.time()
-    wav_data = evaluate_response.convert_to_wav(audio_data)
+    denoised = evaluate_response.denoise_audio(audio_data)
+    wav_data = evaluate_response.convert_to_wav(denoised)
     response_text = evaluate_response.transcribe_audio(wav_data)
     logger.info(f"⏱ convert+transcribe took {(time.time() - convert_start):.2f}s")
 
