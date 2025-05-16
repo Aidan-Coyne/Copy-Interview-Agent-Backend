@@ -7,10 +7,10 @@ import subprocess
 import random
 import time
 import re
+import tempfile
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
 
-from vosk import Model, KaldiRecognizer
 import spacy
 from fuzzywuzzy import fuzz
 from rank_bm25 import BM25Okapi
@@ -18,14 +18,14 @@ from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
 import numpy as np
 import webrtcvad
+from faster_whisper import WhisperModel
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# ✅ Reverted to smaller, faster model
-VOSK_MODEL_PATH = "/app/models/vosk-model-small-en-us-0.15"
-vosk_model = Model(VOSK_MODEL_PATH)
-logger.info(f"✅ Loaded Vosk model from {VOSK_MODEL_PATH}")
+# ✅ Load FasterWhisper tiny model
+whisper_model = WhisperModel("tiny", compute_type="int8")
+logger.info("✅ Loaded FasterWhisper model: tiny")
 
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
@@ -53,7 +53,6 @@ class TranscriptionError(Exception):
     pass
 
 def convert_to_wav(audio_data: bytes) -> bytes:
-    # Includes denoising via FFmpeg filters
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
          "-af", "highpass=f=200, lowpass=f=3000",
@@ -68,28 +67,18 @@ def convert_to_wav(audio_data: bytes) -> bytes:
 def transcribe_audio(audio_data: bytes) -> str:
     start = time.time()
     try:
-        wf = wave.open(BytesIO(audio_data), 'rb')
-    except Exception:
-        raise TranscriptionError("Invalid audio format.")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_wav:
+            temp_wav.write(audio_data)
+            temp_wav_path = temp_wav.name
 
-    if wf.getframerate() != 16000 or wf.getnchannels() != 1 or wf.getsampwidth() != 2:
-        raise TranscriptionError("Audio must be mono, 16-bit, 16kHz WAV format.")
-
-    rec = KaldiRecognizer(vosk_model, wf.getframerate())
-    results = []
-
-    while True:
-        buf = wf.readframes(4000)
-        if len(buf) == 0:
-            break
-        if rec.AcceptWaveform(buf):
-            part = json.loads(rec.Result())
-            results.append(part.get("text", ""))
-    results.append(json.loads(rec.FinalResult()).get("text", ""))
-    text = " ".join(results).strip()
+        segments, _ = whisper_model.transcribe(temp_wav_path, beam_size=1)
+        text = " ".join(segment.text for segment in segments).strip()
+    except Exception as e:
+        raise TranscriptionError(f"FasterWhisper transcription failed: {e}")
 
     elapsed = time.time() - start
-    logger.info(f"⏱ Vosk transcription took {elapsed:.2f}s")
+    logger.info(f"⏱ FasterWhisper transcription took {elapsed:.2f}s")
+
     if not text:
         raise TranscriptionError("Could not understand audio. Please speak clearly.")
     return text.lower()

@@ -21,11 +21,15 @@ WORKDIR /build
 COPY requirements.txt . 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Pre-download spaCy, HF & ONNX models + Vosk + verify ONNX runtime
+# 4. Install faster-whisper and pre-cache the tiny model
+RUN pip install --no-cache-dir faster-whisper
+
+# 5. Pre-download spaCy, HF, ONNX, Whisper & Vosk models
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForSeq2SeqLM
+from faster_whisper import WhisperModel
 
 # → spaCy English
 spacy.cli.download("en_core_web_sm")
@@ -34,20 +38,21 @@ spacy.cli.download("en_core_web_sm")
 SentenceTransformer("all-MiniLM-L6-v2")
 
 # → NLI model (cache)
-nli_model = "roberta-large-mnli"
-AutoTokenizer.from_pretrained(nli_model)
-AutoModelForSequenceClassification.from_pretrained(nli_model)
+AutoTokenizer.from_pretrained("roberta-large-mnli")
+AutoModelForSequenceClassification.from_pretrained("roberta-large-mnli")
 
 # → feedback LLM (FLAN-T5 base)
-feedback_model = "google/flan-t5-base"
-AutoTokenizer.from_pretrained(feedback_model)
-AutoModelForSeq2SeqLM.from_pretrained(feedback_model)
+AutoTokenizer.from_pretrained("google/flan-t5-base")
+AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
 
-# → ONNX runtime sanity check
+# → ONNX sanity
 _ = onnxruntime.get_device()
+
+# → Whisper (tiny model)
+WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 EOF
 
-# 5. Download & unpack Vosk SMALL model (faster)
+# 6. Download & unpack Vosk SMALL model (faster)
 RUN mkdir -p /app/models && \
     wget -qO /app/models/vosk-model-small-en-us-0.15.zip \
       https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip && \
@@ -57,7 +62,6 @@ RUN mkdir -p /app/models && \
 # ─── STAGE 2: runtime image ──────────────────────────────────────────────────
 FROM python:3.12-slim
 
-# re-create cache dirs
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     HF_HOME=/cache/huggingface \
     SPACY_CACHE=/cache/spacy
@@ -69,12 +73,10 @@ RUN apt-get update && \
       ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# copy site-packages, binaries & caches from builder
+# copy Python site-packages, bin, cache and models
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin               /usr/local/bin
 COPY --from=builder /cache                        /cache
-
-# copy the pre-downloaded models
 COPY --from=builder /app/models                   /app/models
 
 # copy your application code
