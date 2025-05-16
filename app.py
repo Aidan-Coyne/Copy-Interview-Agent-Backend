@@ -6,6 +6,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "2")
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import process_cv
 import search_company
 import question_generation
@@ -86,7 +87,6 @@ try:
         logger.warning("⚠️ Firebase bucket unavailable, skipping ONNX model download.")
 except Exception as e:
     logger.error(f"❌ Failed to download ONNX model: {e}")
-    # Do not raise; allow app to continue
 
 # ─── Session Storage ────────────────────────────────────────────────────────────
 session_data: Dict[str, Dict] = {}
@@ -227,12 +227,18 @@ async def evaluate_audio_response(
         "response_audio_url": response_url
     })
 
+# ✅ Updated re-evaluate endpoint
+class ReEvalRequest(BaseModel):
+    session_id: str
+    question_index: int
+    edited_response: str
+
 @app.post("/re_evaluate_response/")
-async def re_evaluate_response(
-    session_id: str = Form(...),
-    question_index: int = Form(...),
-    edited_response: str = Form(...)
-):
+async def re_evaluate_response(data: ReEvalRequest):
+    session_id = data.session_id
+    question_index = data.question_index
+    edited_response = data.edited_response
+
     if session_id not in session_data:
         raise HTTPException(status_code=400, detail="Session not found.")
 
