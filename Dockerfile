@@ -1,32 +1,29 @@
 # ─── STAGE 1: build & cache everything ────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
-# 1. Install system deps
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      ffmpeg \
-      cmake \
-      build-essential \
-      libopenblas-dev \
-      git \
-      wget \
-      unzip \
+# 1. Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    cmake \
+    build-essential \
+    libopenblas-dev \
+    git \
+    wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Set HuggingFace/spaCy cache dirs
+# 2. Set model cache directories
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     HF_HOME=/cache/huggingface \
     SPACY_CACHE=/cache/spacy
 
-# 3. Install Python dependencies
+# 3. Install Python packages
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# 4. Install FasterWhisper and download model
 RUN pip install --no-cache-dir faster-whisper
 
-# 5. Download pretrained models
+# 4. Preload models for faster startup
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
@@ -40,42 +37,46 @@ WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 _ = onnxruntime.get_device()
 EOF
 
-# 6. Build llama.cpp and rename binary to 'llama'
+# 5. Clone llama.cpp and build binary
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf \
-      -O /llama.cpp/models/phi-2.gguf && \
+        -O /llama.cpp/models/phi-2.gguf && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j$(nproc) && \
-    cp bin/main bin/llama  # 🔥 rename compiled binary to expected name
+    mkdir -p /llama.cpp/build/bin && \
+    cp ./llama /llama.cpp/build/bin/llama  # ✅ Ensure binary exists where runtime expects it
 
-# ─── STAGE 2: runtime image ───────────────────────────────────────────────────
+# ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
 
+# Set model cache environment
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     HF_HOME=/cache/huggingface \
     SPACY_CACHE=/cache/spacy
+
 RUN mkdir -p $TRANSFORMERS_CACHE $HF_HOME $SPACY_CACHE
 
-# Install runtime deps
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+# Install runtime system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages and models
+# Copy Python environment and models
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin               /usr/local/bin
-COPY --from=builder /cache                       /cache
-COPY --from=builder /app/models                  /app/models
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /cache /cache
+COPY --from=builder /app/models /app/models
 
-# ✅ Copy compiled llama binary (renamed to llama) and model
-COPY --from=builder /llama.cpp/build/bin/llama   /llama/bin/llama
-COPY --from=builder /llama.cpp/models/           /llama/models/
+# ✅ Copy the compiled llama binary and GGUF model
+COPY --from=builder /llama.cpp/build/bin/llama /llama/bin/llama
+COPY --from=builder /llama.cpp/models /llama/models
 
-# Copy app code
+# Copy application code
 WORKDIR /app
 COPY . .
 
-# Run app
+# Expose app port
 EXPOSE 8000
+
+# Run the FastAPI app
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
