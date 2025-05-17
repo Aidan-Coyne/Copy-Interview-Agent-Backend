@@ -255,7 +255,7 @@ def score_response(
 
     try:
         prompt = f"""
-You are an interview coach. A candidate just answered the question below.
+You are an interview coach helping a candidate improve their answer.
 
 QUESTION:
 "{question_text}"
@@ -263,11 +263,11 @@ QUESTION:
 ANSWER:
 "{response_text}"
 
-Your task is to provide helpful, specific feedback in two short paragraphs:
-- First, identify a strength in their response. Quote it directly and explain why it's effective.
-- Then, offer a constructive improvement. Suggest what could be clearer, more specific, or more complete.
+Give two short paragraphs of feedback:
+1. Mention one strong or effective part of the answer. Quote the exact phrase and say why it’s good.
+2. Suggest one improvement. Be specific and avoid repeating the question.
 
-Be concise, helpful, and specific. Avoid generic tips. Only refer to this answer.
+Only return feedback. Do not repeat this prompt.
 """
         llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
         logger.debug(f"LLM returned raw output:\n{repr(llm_out)}")
