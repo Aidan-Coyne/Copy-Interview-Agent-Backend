@@ -263,21 +263,24 @@ QUESTION:
 ANSWER:
 "{response_text}"
 
-Your task is to provide **2 helpful and specific bullet points**:
-1. Highlight something strong or relevant in the answer. Quote the exact phrase from the answer if possible, and explain why it's good.
-2. Suggest how they could improve this specific answer. Be direct and specific—suggest missing details, better examples, or structure.
+Your task is to provide **exactly two numbered bullet points**:
+1. Highlight a strength or relevant part of the answer. Quote the phrase and explain why it's good.
+2. Suggest a clear improvement. Be direct—point out what's missing, unclear, or could be better.
 
-Make sure the feedback is focused **only on this question and answer**. Be concise, helpful, and constructive.
-
-Return exactly:
-1. [positive feedback]
-2. [improvement suggestion]
+Be brief and focused. Return **just the two bullets**.
 """
         llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
-        logger.debug(f"LLM returned raw output:\n{llm_out}")
+        logger.debug(f"LLM returned raw output:\n{repr(llm_out)}")
 
-        bullets = [line.strip("• ").strip() for line in llm_out.splitlines() if line.strip()]
-        valid_bullets = [b for b in bullets if b and not b.strip().isdigit()]
+        # More robust bullet extraction using regex
+        bullet_regex = re.findall(r"(?:^|\n)[\d\u2022\-]+\s*(.*?)(?=(?:\n[\d\u2022\-]|\Z))", llm_out, re.DOTALL)
+        valid_bullets = [b.strip() for b in bullet_regex if b.strip()]
+
+        # Fallback: detect format like "1. text 2. text"
+        if not valid_bullets and "1." in llm_out and "2." in llm_out:
+            parts = llm_out.split("2.")
+            valid_bullets = [parts[0].replace("1.", "").strip(), parts[1].strip()] if len(parts) == 2 else []
+
         if not valid_bullets:
             suggestions.append({
                 "area": "Personalized Feedback",
