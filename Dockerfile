@@ -67,7 +67,7 @@ COPY --from=builder /usr/local/bin               /usr/local/bin
 COPY --from=builder /cache                       /cache
 COPY --from=builder /app/models                  /app/models
 
-# Copy all compiled binaries from llama.cpp and GGUF models
+# ✅ Preferred: Copy all compiled llama binaries and GGUF models
 COPY --from=builder /llama.cpp/build/bin/        /llama/bin/
 COPY --from=builder /llama.cpp/models/           /llama/models/
 
