@@ -48,8 +48,9 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     echo "🔍 Listing built binaries:" && \
     find . -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
-    cp $(find . -type f \( -name "main" -o -name "llama" \) -perm -111 | head -n 1) /llama/bin/llama || \
-    (echo "❌ ERROR: 'llama' binary not found after build." && ls -R . && exit 1)
+    if [ -f ./main ]; then cp ./main /llama/bin/llama; \
+    elif [ -f ./llama ]; then cp ./llama /llama/bin/llama; \
+    else echo "❌ ERROR: 'llama' binary not found after build." && ls -R . && exit 1; fi
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
