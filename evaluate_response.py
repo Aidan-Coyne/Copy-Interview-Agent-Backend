@@ -17,8 +17,7 @@ import onnxruntime as ort
 import numpy as np
 import webrtcvad
 from faster_whisper import WhisperModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
+from transformers import AutoTokenizer
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -34,13 +33,6 @@ session = ort.InferenceSession(MODEL_PATH)
 
 # ✅ Load SpaCy
 nlp = spacy.load("en_core_web_sm")
-
-# ✅ Load Phi-2 LLM for personalized feedback
-phi_tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-2")
-phi_model = AutoModelForCausalLM.from_pretrained("microsoft/phi-2")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-phi_model = phi_model.to(device)
-phi_model.eval()
 
 FILLER_WORDS = {
     "um", "uh", "like", "you know", "i mean", "basically", "sort of", "kind of", "er", "erm"
@@ -213,17 +205,19 @@ Give two short paragraphs of feedback:
 Only return feedback. Do not repeat this prompt.
 """.strip()
 
-    inputs = phi_tokenizer(prompt, return_tensors="pt").to(device)
-    output = phi_model.generate(
-        **inputs,
-        max_new_tokens=200,
-        temperature=0.7,
-        do_sample=False,
-        pad_token_id=phi_tokenizer.eos_token_id
-    )
-    decoded = phi_tokenizer.decode(output[0], skip_special_tokens=True)
-    lines = decoded.split("\n")
-    return [line.strip() for line in lines if line.strip()][:2]
+    try:
+        result = subprocess.run(
+            ["/llama/bin/main", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        output = result.stdout
+        lines = output.strip().split("\n")
+        return [line.strip() for line in lines if line.strip()][:2]
+    except Exception:
+        logger.exception("Phi-2 llama.cpp feedback generation failed")
+        return ["Could not generate feedback. Try a more complete or clearer answer."]
 
 def score_response(
     response_text: str,
@@ -278,14 +272,10 @@ def score_response(
 
     try:
         paragraphs = generate_phi2_feedback(question_text, response_text)
-        if paragraphs:
-            for p in paragraphs:
-                suggestions.append({"area": "Personalized Feedback", "feedback": p})
-        else:
-            suggestions.append({"area": "Personalized Feedback", "feedback": "Could not generate feedback. Try a more complete answer."})
+        for p in paragraphs:
+            suggestions.append({"area": "Personalized Feedback", "feedback": p})
     except Exception:
-        logger.exception("Phi-2 feedback generation failed")
-        suggestions.append({"area": "Personalized Feedback", "feedback": "An error occurred while generating feedback."})
+        suggestions.append({"area": "Personalized Feedback", "feedback": "Could not generate feedback. Try speaking more clearly or answering in more detail."})
 
     logger.info(f"✅ Evaluation pipeline completed in {time.time() - start_time:.2f}s")
     return {
