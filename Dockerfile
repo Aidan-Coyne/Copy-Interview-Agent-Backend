@@ -46,7 +46,7 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)" && \
     echo "🔍 Listing built binaries:" && \
-    find . -type f -executable && \
+    find . -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
     cp $(find . -type f -name "llama" -perm -111 | head -n 1) /llama/bin/llama || \
     (echo "❌ ERROR: 'llama' binary not found after build." && ls -R . && exit 1)
