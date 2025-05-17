@@ -45,7 +45,7 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j$(nproc) && \
     mkdir -p /llama.cpp/build/bin && \
-    cp $(find . -maxdepth 1 -type f -executable | head -n 1) /llama.cpp/build/bin/llama
+    cp $(find . -type f -executable -name "llama" || echo /llama.cpp/build/bin/llama-server) /llama.cpp/build/bin/llama
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
