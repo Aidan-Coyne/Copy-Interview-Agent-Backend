@@ -45,8 +45,11 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)" && \
+    echo "🔍 Listing built binaries:" && \
+    find . -type f -executable && \
     mkdir -p /llama/bin && \
-    cp $(find . -type f -executable -name "llama" -print -quit) /llama/bin/llama
+    cp $(find . -type f -name "llama" -perm -111 | head -n 1) /llama/bin/llama || \
+    (echo "❌ ERROR: 'llama' binary not found after build." && ls -R . && exit 1)
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
@@ -69,8 +72,8 @@ COPY --from=builder /cache /cache
 COPY --from=builder /app/models /app/models
 
 # ✅ Copy the compiled llama binary and GGUF model
-COPY --from=builder /llama/bin/llama /llama/bin/llama
 COPY --from=builder /llama.cpp/models /llama/models
+COPY --from=builder /llama/bin/llama /llama/bin/llama
 
 # Copy application code
 WORKDIR /app
