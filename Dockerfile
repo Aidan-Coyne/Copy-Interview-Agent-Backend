@@ -39,13 +39,14 @@ EOF
 
 # 5. Clone llama.cpp and build binary
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
+    mkdir -p /llama.cpp/models && \
     wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf \
         -O /llama.cpp/models/phi-2.gguf && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
-    make -j$(nproc) && \
-    mkdir -p /llama.cpp/build/bin && \
-    cp $(find . -type f -executable -name "llama" || echo /llama.cpp/build/bin/llama-server) /llama.cpp/build/bin/llama
+    make -j"$(nproc)" && \
+    mkdir -p /llama/bin && \
+    cp $(find . -type f -executable -name "llama" -print -quit) /llama/bin/llama
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
@@ -68,7 +69,7 @@ COPY --from=builder /cache /cache
 COPY --from=builder /app/models /app/models
 
 # ✅ Copy the compiled llama binary and GGUF model
-COPY --from=builder /llama.cpp/build/bin/llama /llama/bin/llama
+COPY --from=builder /llama/bin/llama /llama/bin/llama
 COPY --from=builder /llama.cpp/models /llama/models
 
 # Copy application code
