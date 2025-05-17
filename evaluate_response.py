@@ -13,12 +13,12 @@ from typing import List, Dict, Tuple, Any, Optional
 
 import spacy
 from fuzzywuzzy import fuzz
-from rank_bm25 import BM25Okapi
-from transformers import AutoTokenizer, pipeline
 import onnxruntime as ort
 import numpy as np
 import webrtcvad
 from faster_whisper import WhisperModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -27,20 +27,20 @@ logger = logging.getLogger(__name__)
 whisper_model = WhisperModel("tiny", compute_type="int8")
 logger.info("✅ Loaded FasterWhisper model: tiny")
 
+# ✅ Load ONNX sentence encoder
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 session = ort.InferenceSession(MODEL_PATH)
 
-nli = pipeline("text-classification", model="roberta-large-mnli")
+# ✅ Load SpaCy
 nlp = spacy.load("en_core_web_sm")
 
-dynamic_feedback = pipeline(
-    "text2text-generation",
-    model="google/flan-t5-base",
-    tokenizer="google/flan-t5-base",
-    max_length=512,
-    do_sample=False
-)
+# ✅ Load Phi-2 LLM for personalized feedback
+phi_tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-2")
+phi_model = AutoModelForCausalLM.from_pretrained("microsoft/phi-2")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+phi_model = phi_model.to(device)
+phi_model.eval()
 
 FILLER_WORDS = {
     "um", "uh", "like", "you know", "i mean", "basically", "sort of", "kind of", "er", "erm"
@@ -161,18 +161,11 @@ def detect_long_pauses(wav_bytes: bytes) -> float:
 
     return 1 - (speech / frames) if frames else 0.0
 
-def clarity_score(q: str, r: str, wav_bytes: bytes) -> float:
-    out = nli(f"{q} </s></s> {r}")
-    ent = next((x for x in out if x["label"] == "ENTAILMENT"), None)
-    entail = (ent["score"] * 100) if ent else 0.0
-
+def clarity_score(r: str, wav_bytes: bytes) -> float:
     pause_penalty = detect_long_pauses(wav_bytes)
     filler_count = count_filler_words(r)
     filler_penalty = min(0.05 * filler_count, 0.25)
-
-    clarity = entail * (1 - pause_penalty)
-    adjusted = clarity * (1 - filler_penalty)
-    return adjusted
+    return 100 * (1 - pause_penalty) * (1 - filler_penalty)
 
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
@@ -203,6 +196,35 @@ def pick_feedback(area: str, score: float) -> str:
     tier = get_tier(score)
     return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
 
+def generate_phi2_feedback(question: str, answer: str) -> List[str]:
+    prompt = f"""
+You are an interview coach helping a candidate improve their answer.
+
+QUESTION:
+"{question}"
+
+ANSWER:
+"{answer}"
+
+Give two short paragraphs of feedback:
+1. Mention one strong or effective part of the answer. Quote the exact phrase and say why it’s good.
+2. Suggest one improvement. Be specific and avoid repeating the question.
+
+Only return feedback. Do not repeat this prompt.
+""".strip()
+
+    inputs = phi_tokenizer(prompt, return_tensors="pt").to(device)
+    output = phi_model.generate(
+        **inputs,
+        max_new_tokens=200,
+        temperature=0.7,
+        do_sample=False,
+        pad_token_id=phi_tokenizer.eos_token_id
+    )
+    decoded = phi_tokenizer.decode(output[0], skip_special_tokens=True)
+    lines = decoded.split("\n")
+    return [line.strip() for line in lines if line.strip()][:2]
+
 def score_response(
     response_text: str,
     question_text: str,
@@ -223,7 +245,7 @@ def score_response(
     keyword_score = len(matched) / len(kws) * 100 if kws else 0
 
     sem = semantic_similarity(question_text, response_text)
-    clr = clarity_score(question_text, response_text, wav_bytes)
+    clr = clarity_score(response_text, wav_bytes)
     qterms = question_terms_score(question_text, response_text)
 
     rel_w = {"semantic": .70, "clarity": .15, "qterms": .15}
@@ -237,11 +259,12 @@ def score_response(
         {"area": "Scoring Explanation", "feedback": f"Final score {score10}/10 (Keywords {keyword_score:.1f}%×{kw_w}, Relevance {question_score:.1f}%×{qt_w})."},
         {"area": "Relevance Breakdown", "feedback": f"Topic Fit: {sem:.1f}%  •  Clarity: {clr:.1f}%  •  Question Terms Used: {qterms:.1f}%"}
     ]
+
     if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
     if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
     if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
     if count_filler_words(response_text) > 0:
-        suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce filler words like 'uh', 'like', or 'you know' to improve clarity."})
+        suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce filler words like 'uh', 'like', or 'you know'."})
     if missing:
         suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if question_type == "behavioral":
@@ -254,40 +277,15 @@ def score_response(
         suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
 
     try:
-        prompt = f"""
-You are an interview coach helping a candidate improve their answer.
-
-QUESTION:
-"{question_text}"
-
-ANSWER:
-"{response_text}"
-
-Give two short paragraphs of feedback:
-1. Mention one strong or effective part of the answer. Quote the exact phrase and say why it’s good.
-2. Suggest one improvement. Be specific and avoid repeating the question.
-
-Only return feedback. Do not repeat this prompt.
-"""
-        llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
-        logger.debug(f"LLM returned raw output:\n{repr(llm_out)}")
-
-        parts = [p.strip() for p in llm_out.split("\n") if p.strip()]
-        if parts:
-            for part in parts[:2]:
-                suggestions.append({"area": "Personalized Feedback", "feedback": part})
+        paragraphs = generate_phi2_feedback(question_text, response_text)
+        if paragraphs:
+            for p in paragraphs:
+                suggestions.append({"area": "Personalized Feedback", "feedback": p})
         else:
-            suggestions.append({
-                "area": "Personalized Feedback",
-                "feedback": "Could not extract meaningful personalized feedback. Try speaking more clearly or giving a fuller answer."
-            })
-
+            suggestions.append({"area": "Personalized Feedback", "feedback": "Could not generate feedback. Try a more complete answer."})
     except Exception:
-        logger.exception("Failed to generate dynamic feedback")
-        suggestions.append({
-            "area": "Personalized Feedback",
-            "feedback": "An error occurred while generating feedback. Please try again."
-        })
+        logger.exception("Phi-2 feedback generation failed")
+        suggestions.append({"area": "Personalized Feedback", "feedback": "An error occurred while generating feedback."})
 
     logger.info(f"✅ Evaluation pipeline completed in {time.time() - start_time:.2f}s")
     return {

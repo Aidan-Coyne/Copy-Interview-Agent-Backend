@@ -9,6 +9,7 @@ RUN apt-get update && \
       git \
       wget \
       unzip \
+      cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Set cache dirs for spaCy & HF
@@ -24,11 +25,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 4. Install faster-whisper and pre-cache the tiny model
 RUN pip install --no-cache-dir faster-whisper
 
-# 5. Pre-download spaCy, HF, ONNX, Whisper & Vosk models
+# 5. Pre-download spaCy, ONNX, SBERT, Whisper
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForSeq2SeqLM
 from faster_whisper import WhisperModel
 
 # → spaCy English
@@ -37,27 +37,20 @@ spacy.cli.download("en_core_web_sm")
 # → SBERT embeddings (cache)
 SentenceTransformer("all-MiniLM-L6-v2")
 
-# → NLI model (cache)
-AutoTokenizer.from_pretrained("roberta-large-mnli")
-AutoModelForSequenceClassification.from_pretrained("roberta-large-mnli")
-
-# → feedback LLM (FLAN-T5 base)
-AutoTokenizer.from_pretrained("google/flan-t5-base")
-AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-
-# → ONNX sanity
+# → ONNX runtime test
 _ = onnxruntime.get_device()
 
-# → Whisper (tiny model)
+# → Whisper tiny model
 WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 EOF
 
-# 6. Download & unpack Vosk SMALL model (faster)
+# 6. Build llama.cpp and download phi-2 model
+RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
+    cd /llama.cpp && make LLAMA_OPENBLAS=1
+
 RUN mkdir -p /app/models && \
-    wget -qO /app/models/vosk-model-small-en-us-0.15.zip \
-      https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip && \
-    unzip -q /app/models/vosk-model-small-en-us-0.15.zip -d /app/models && \
-    rm /app/models/vosk-model-small-en-us-0.15.zip
+    wget -O /app/models/phi-2.Q4_K_M.gguf \
+    https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf
 
 # ─── STAGE 2: runtime image ──────────────────────────────────────────────────
 FROM python:3.12-slim
@@ -78,6 +71,9 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin               /usr/local/bin
 COPY --from=builder /cache                        /cache
 COPY --from=builder /app/models                   /app/models
+
+# copy llama.cpp compiled binary
+COPY --from=builder /llama.cpp /llama.cpp
 
 # copy your application code
 WORKDIR /app
