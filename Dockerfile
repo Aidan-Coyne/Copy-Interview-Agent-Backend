@@ -26,31 +26,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 4. Install FasterWhisper and pre-cache the tiny model
 RUN pip install --no-cache-dir faster-whisper
 
-# 5. Pre-download spaCy & embedding models
+# 5. Pre-download spaCy & embedding/tokenizer models
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer
 from faster_whisper import WhisperModel
 
-# spaCy model
 spacy.cli.download("en_core_web_sm")
-
-# Sentence transformer (SBERT-style)
 SentenceTransformer("all-MiniLM-L6-v2")
-
-# Phi-2 tokenizer (cache only)
 AutoTokenizer.from_pretrained("microsoft/phi-2")
-
-# Whisper (tiny)
 WhisperModel("tiny", download_root="/app/models", compute_type="int8")
-
-# ONNX CPU sanity check
 _ = onnxruntime.get_device()
 EOF
 
 # 6. Build llama.cpp with CMake for Phi-2 and disable CURL
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
+    wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf -O /llama.cpp/models/phi-2.gguf && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j$(nproc)
@@ -75,7 +67,7 @@ COPY --from=builder /usr/local/bin               /usr/local/bin
 COPY --from=builder /cache                       /cache
 COPY --from=builder /app/models                  /app/models
 
-# Copy llama.cpp compiled binaries
+# Copy llama.cpp compiled binaries and GGUF model
 COPY --from=builder /llama.cpp/build/bin/        /llama/bin/
 COPY --from=builder /llama.cpp/models/           /llama/models/
 
