@@ -263,35 +263,31 @@ QUESTION:
 ANSWER:
 "{response_text}"
 
-Your task is to provide **exactly two numbered bullet points**:
-1. Highlight a strength or relevant part of the answer. Quote the phrase and explain why it's good.
-2. Suggest a clear improvement. Be direct—point out what's missing, unclear, or could be better.
+Your task is to provide helpful, specific feedback in two short paragraphs:
+- First, identify a strength in their response. Quote it directly and explain why it's effective.
+- Then, offer a constructive improvement. Suggest what could be clearer, more specific, or more complete.
 
-Be brief and focused. Return **just the two bullets**.
+Be concise, helpful, and specific. Avoid generic tips. Only refer to this answer.
 """
         llm_out = dynamic_feedback(prompt.strip())[0]["generated_text"].strip()
         logger.debug(f"LLM returned raw output:\n{repr(llm_out)}")
 
-        # More robust bullet extraction using regex
-        bullet_regex = re.findall(r"(?:^|\n)[\d\u2022\-]+\s*(.*?)(?=(?:\n[\d\u2022\-]|\Z))", llm_out, re.DOTALL)
-        valid_bullets = [b.strip() for b in bullet_regex if b.strip()]
-
-        # Fallback: detect format like "1. text 2. text"
-        if not valid_bullets and "1." in llm_out and "2." in llm_out:
-            parts = llm_out.split("2.")
-            valid_bullets = [parts[0].replace("1.", "").strip(), parts[1].strip()] if len(parts) == 2 else []
-
-        if not valid_bullets:
+        parts = [p.strip() for p in llm_out.split("\n") if p.strip()]
+        if parts:
+            for part in parts[:2]:
+                suggestions.append({"area": "Personalized Feedback", "feedback": part})
+        else:
             suggestions.append({
                 "area": "Personalized Feedback",
                 "feedback": "Could not extract meaningful personalized feedback. Try speaking more clearly or giving a fuller answer."
             })
-        else:
-            for item in valid_bullets[:2]:
-                suggestions.append({"area": "Personalized Feedback", "feedback": item})
 
     except Exception:
         logger.exception("Failed to generate dynamic feedback")
+        suggestions.append({
+            "area": "Personalized Feedback",
+            "feedback": "An error occurred while generating feedback. Please try again."
+        })
 
     logger.info(f"✅ Evaluation pipeline completed in {time.time() - start_time:.2f}s")
     return {
