@@ -84,12 +84,7 @@ def extract_skills_from_response(response_text: str) -> List[str]:
     doc = nlp(response_text)
     return list({t.text.lower() for t in doc if t.pos_ in {"NOUN", "VERB"}})
 
-def get_relevant_keywords(
-    question_data: Dict[str, Any],
-    job_role: str,
-    company_name: str,
-    company_info: str
-) -> Tuple[List[str], str, Optional[str]]:
+def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_name: str, company_info: str) -> Tuple[List[str], str, Optional[str]]:
     qtext = question_data.get("question_text", "").lower()
     kws = set()
     for rk in question_data.get("role_keywords", []):
@@ -169,18 +164,18 @@ def get_tier(score: float) -> str:
 TEMPLATES = {
     "Topic Fit": {
         "needs_improvement": ["Make sure your answer matches the main topic more closely."],
-        "on_track":          ["Good topic match—just tighten up the phrasing."],
-        "strong":            ["Excellent topic alignment!"]
+        "on_track": ["Good topic match—just tighten up the phrasing."],
+        "strong": ["Excellent topic alignment!"]
     },
     "Clear Answer": {
         "needs_improvement": ["Try to reduce long pauses and keep focus."],
-        "on_track":          ["Your answer is clear—nice flow."],
-        "strong":            ["Excellent clarity and flow!"]
+        "on_track": ["Your answer is clear—nice flow."],
+        "strong": ["Excellent clarity and flow!"]
     },
     "Question Terms Used": {
         "needs_improvement": ["Include more of the question’s exact words to show relevance."],
-        "on_track":          ["Good use of key terms—add synonyms to show range."],
-        "strong":            ["Great keyword coverage!"]
+        "on_track": ["Good use of key terms—add synonyms to show range."],
+        "strong": ["Great keyword coverage!"]
     }
 }
 
@@ -193,10 +188,10 @@ def generate_phi2_feedback(question: str, answer: str) -> List[str]:
 You are an interview coach helping a candidate improve their answer.
 
 QUESTION:
-"{question}"
+"{question.strip()[:300]}"
 
 ANSWER:
-"{answer}"
+"{answer.strip()[:400]}"
 
 Give two short paragraphs of feedback:
 1. Mention one strong or effective part of the answer. Quote the exact phrase and say why it’s good.
@@ -210,14 +205,21 @@ Only return feedback. Do not repeat this prompt.
             ["/llama/bin/main", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
             capture_output=True,
             text=True,
-            check=True
+            timeout=60
         )
-        output = result.stdout
-        lines = output.strip().split("\n")
-        return [line.strip() for line in lines if line.strip()][:2]
+        if result.returncode != 0:
+            logger.error(f"LLM subprocess failed: {result.stderr}")
+            return ["Feedback could not be generated (model execution failed)."]
+
+        lines = result.stdout.strip().split("\n")
+        content = [line.strip() for line in lines if line.strip() and not line.lower().startswith("prompt:")]
+        return content[:2] if content else ["No meaningful feedback was generated."]
+    except subprocess.TimeoutExpired:
+        logger.error("Phi-2 subprocess timed out.")
+        return ["Feedback generation took too long. Try a shorter answer."]
     except Exception:
-        logger.exception("Phi-2 llama.cpp feedback generation failed")
-        return ["Could not generate feedback. Try a more complete or clearer answer."]
+        logger.exception("Unexpected error during Phi-2 feedback generation")
+        return ["Could not generate feedback. Please try again later."]
 
 def score_response(
     response_text: str,
