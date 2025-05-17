@@ -49,10 +49,10 @@ WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 _ = onnxruntime.get_device()
 EOF
 
-# 6. Build llama.cpp with CMake for Phi-2
+# 6. Build llama.cpp with CMake for Phi-2 and disable CURL
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cd /llama.cpp && mkdir build && cd build && \
-    cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS && \
+    cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j$(nproc)
 
 # ─── STAGE 2: runtime image ───────────────────────────────────────────────────
