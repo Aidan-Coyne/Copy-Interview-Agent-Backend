@@ -48,7 +48,7 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     echo "🔍 Listing built binaries:" && \
     find . -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
-    cp $(find . -type f -name "llama" -perm -111 | head -n 1) /llama/bin/llama || \
+    cp $(find . -type f \( -name "main" -o -name "llama" \) -perm -111 | head -n 1) /llama/bin/llama || \
     (echo "❌ ERROR: 'llama' binary not found after build." && ls -R . && exit 1)
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
