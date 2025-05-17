@@ -47,9 +47,6 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cmake .. -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j$(nproc)
 
-# Optional: Debug the output binary name
-RUN ls -al /llama.cpp/build/bin
-
 # ─── STAGE 2: runtime image ───────────────────────────────────────────────────
 FROM python:3.12-slim
 
@@ -70,8 +67,8 @@ COPY --from=builder /usr/local/bin               /usr/local/bin
 COPY --from=builder /cache                       /cache
 COPY --from=builder /app/models                  /app/models
 
-# Copy llama.cpp compiled binary (renamed to 'main' for consistency) and GGUF model
-COPY --from=builder /llama.cpp/build/bin/llama   /llama/bin/main
+# Copy all compiled binaries from llama.cpp and GGUF models
+COPY --from=builder /llama.cpp/build/bin/        /llama/bin/
 COPY --from=builder /llama.cpp/models/           /llama/models/
 
 # Copy your application code
