@@ -53,10 +53,9 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)" && \
     echo "🔍 Listing built binaries:" && \
-    find . -type f -executable -exec ls -lh {} \; && \
+    find bin -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
-    cp ./bin/main /llama/bin/llama || \
-    (echo "❌ ERROR: 'main' binary not found after build." && exit 1)
+    cp -r ./bin/* /llama/bin/
 RUN echo "✅ Finished building llama.cpp"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
