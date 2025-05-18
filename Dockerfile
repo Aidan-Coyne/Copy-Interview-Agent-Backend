@@ -42,7 +42,7 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Clone llama.cpp and build the default CLI
+# 5. Clone llama.cpp and build llama-cli
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
@@ -53,9 +53,13 @@ RUN mkdir -p models && \
 RUN mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)"
-RUN mkdir -p /llama/bin && cp ./build/bin/llama /llama/bin/llama
 
-RUN echo "✅ Built llama CLI"
+# Debug: list contents of build/bin
+RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin
+
+# Copy llama-cli binary and rename it to llama
+RUN mkdir -p /llama/bin && cp ./build/bin/llama-cli /llama/bin/llama
+RUN echo "✅ Built and copied llama CLI"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
