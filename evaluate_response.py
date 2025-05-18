@@ -203,7 +203,7 @@ Only return feedback. Do not repeat this prompt.
     try:
         logger.debug("🚀 Invoking llama.cpp with prompt")
         result = subprocess.run(
-            ["/llama/bin/llama", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
+            ["/llama/bin/llama_main", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
             capture_output=True,
             text=True,
             timeout=60

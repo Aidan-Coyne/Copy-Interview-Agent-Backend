@@ -53,10 +53,12 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)" && \
+    echo "🔍 Listing contents of /llama.cpp/build/bin:" && \
+    ls -lh /llama.cpp/build/bin || echo "(⚠️ bin folder missing)" && \
     echo "🔍 Listing all executables in build directory:" && \
-    find . -type f -executable -exec ls -lh {} \; && \
+    find /llama.cpp/build -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
-    cp ./llama_main /llama/bin/llama
+    cp -r /llama.cpp/build/* /llama/bin/
 RUN echo "✅ Finished building llama.cpp"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
