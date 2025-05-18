@@ -42,7 +42,7 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Clone llama.cpp and build llama-cli
+# 5. Clone llama.cpp and build the CLI
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
@@ -54,19 +54,22 @@ RUN mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)"
 
-# Debug: list contents of build/bin
 RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin
 
-# Copy llama-cli binary and rename it to llama
-RUN mkdir -p /llama/bin && cp ./build/bin/llama-cli /llama/bin/llama
-RUN echo "✅ Built and copied llama CLI"
+# Copy CLI binary and shared library
+RUN mkdir -p /llama/bin && \
+    cp ./build/bin/llama-cli /llama/bin/llama && \
+    cp ./build/bin/libllama.so /llama/bin/
+
+RUN echo "✅ Built llama CLI and copied shared libs"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
 
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     HF_HOME=/cache/huggingface \
-    SPACY_CACHE=/cache/spacy
+    SPACY_CACHE=/cache/spacy \
+    LD_LIBRARY_PATH=/llama/bin
 RUN mkdir -p $TRANSFORMERS_CACHE $HF_HOME $SPACY_CACHE
 RUN echo "✅ Created model cache directories"
 
@@ -80,8 +83,8 @@ COPY --from=builder /cache /cache
 COPY --from=builder /app/models /app/models
 
 COPY --from=builder /llama.cpp/models/ /llama/models/
-COPY --from=builder /llama/bin/llama /llama/bin/llama
-RUN echo "✅ Copied llama binary and model"
+COPY --from=builder /llama/bin/ /llama/bin/
+RUN echo "✅ Copied llama binary and shared libraries"
 
 WORKDIR /app
 COPY . .
