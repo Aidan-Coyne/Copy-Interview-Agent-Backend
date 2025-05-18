@@ -49,15 +49,16 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf \
         -O /llama.cpp/models/phi-2.gguf && \
     echo "🎯 Downloaded phi-2 GGUF model" && \
+    echo 'add_executable(llama_main main/main.cpp)\ntarget_link_libraries(llama_main PRIVATE llama)' >> /llama.cpp/CMakeLists.txt && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)" && \
     echo "🔍 Listing contents of /llama.cpp/build/bin:" && \
-    ls -lh /llama.cpp/build/bin && \
+    ls -lh /llama.cpp/build/bin || echo "(⚠️ bin folder missing)" && \
     echo "🔍 Listing all executables in build directory:" && \
     find /llama.cpp/build -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
-    cp -r /llama.cpp/build/bin/* /llama/bin/
+    cp -r /llama.cpp/build/* /llama/bin/
 RUN echo "✅ Finished building llama.cpp"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────

@@ -154,6 +154,10 @@ def clarity_score(r: str, wav_bytes: bytes) -> float:
     filler_penalty = min(0.05 * filler_count, 0.25)
     return 100 * (1 - pause_penalty) * (1 - filler_penalty)
 
+def pick_feedback(area: str, score: float) -> str:
+    tier = get_tier(score)
+    return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
+
 TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
     for thresh, name in TIERS:
@@ -179,10 +183,6 @@ TEMPLATES = {
     }
 }
 
-def pick_feedback(area: str, score: float) -> str:
-    tier = get_tier(score)
-    return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
-
 def generate_phi2_feedback(question: str, answer: str) -> List[str]:
     prompt = f"""
 You are an interview coach helping a candidate improve their answer.
@@ -201,6 +201,7 @@ Only return feedback. Do not repeat this prompt.
 """.strip()
 
     try:
+        logger.debug("🚀 Invoking llama.cpp with prompt")
         result = subprocess.run(
             ["/llama/bin/llama", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
             capture_output=True,
@@ -208,7 +209,9 @@ Only return feedback. Do not repeat this prompt.
             timeout=60
         )
         if result.returncode != 0:
-            logger.error(f"LLM subprocess failed: {result.stderr}")
+            logger.error("⚠️ LLM subprocess failed")
+            logger.error(f"STDOUT: {result.stdout}")
+            logger.error(f"STDERR: {result.stderr}")
             return ["Feedback could not be generated (model execution failed)."]
 
         lines = result.stdout.strip().split("\n")
@@ -277,7 +280,7 @@ def score_response(
         for p in paragraphs:
             suggestions.append({"area": "Personalized Feedback", "feedback": p})
     except Exception:
-        suggestions.append({"area": "Personalized Feedback", "feedback": "Could not generate feedback. Try speaking more clearly or answering in more detail."})
+        suggestions.append({"area": "Personalized Feedback", "feedback": "Could not generate feedback. Please try again later."})
 
     logger.info(f"✅ Evaluation pipeline completed in {time.time() - start_time:.2f}s")
     return {
