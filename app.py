@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 # ✅ Firebase setup
 bucket = None
+
 google_creds_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 if google_creds_json:
     try:
@@ -74,7 +75,6 @@ if google_creds_json:
 else:
     logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS_JSON environment variable not found.")
 
-# ✅ ONNX model download
 MODEL_LOCAL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 MODEL_FIREBASE_PATH = "models/paraphrase-MiniLM-L3-v2.onnx"
 try:
@@ -88,7 +88,6 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to download ONNX model: {e}")
 
-# ─── Session Storage ────────────────────────────────────────────────────────────
 session_data: Dict[str, Dict] = {}
 
 def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: str) -> str:
@@ -105,6 +104,23 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
         raise HTTPException(status_code=500, detail=str(e))
     blob.make_public()
     return blob.public_url
+
+def save_session_json(session_id: str):
+    if session_id in session_data:
+        blob = bucket.blob(f"sessions/{session_id}/session_data.json")
+        blob.upload_from_string(json.dumps(session_data[session_id]), content_type="application/json")
+        blob.make_public()
+
+def load_session_json(session_id: str):
+    try:
+        blob = bucket.blob(f"sessions/{session_id}/session_data.json")
+        if blob.exists():
+            session_json = blob.download_as_string()
+            session_data[session_id] = json.loads(session_json)
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to load session {session_id} from Firebase: {e}")
+    return False
 
 @app.get("/")
 def home():
@@ -161,6 +177,8 @@ async def upload_cv(
         "company_name": company_name
     })
 
+    save_session_json(session_id)
+
     return {
         "session_id": session_id,
         "cv_text": cv_text,
@@ -176,7 +194,9 @@ async def evaluate_audio_response(
     session_id: str = Form(...)
 ):
     if session_id not in session_data:
-        raise HTTPException(status_code=400, detail="Session not found. Please generate questions first.")
+        loaded = load_session_json(session_id)
+        if not loaded:
+            raise HTTPException(status_code=400, detail="Session not found. Please generate questions first.")
 
     total_start = time.time()
     logger.info(f"⏳ [evaluate_response] start session={session_id!r} question_index={question_index}")
@@ -227,7 +247,6 @@ async def evaluate_audio_response(
         "response_audio_url": response_url
     })
 
-# ✅ Updated re-evaluate endpoint
 class ReEvalRequest(BaseModel):
     session_id: str
     question_index: int
@@ -240,7 +259,9 @@ async def re_evaluate_response(data: ReEvalRequest):
     edited_response = data.edited_response
 
     if session_id not in session_data:
-        raise HTTPException(status_code=400, detail="Session not found.")
+        loaded = load_session_json(session_id)
+        if not loaded:
+            raise HTTPException(status_code=400, detail="Session not found.")
 
     session = session_data[session_id]
     questions = session.get("questions", [])
@@ -261,7 +282,7 @@ async def re_evaluate_response(data: ReEvalRequest):
         relevant_keywords,
         question_type,
         company_sector,
-        wav_bytes=b""  # Skip audio penalties during manual correction
+        wav_bytes=b""
     )
 
     return JSONResponse(content={
