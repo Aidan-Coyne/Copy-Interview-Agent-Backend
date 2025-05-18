@@ -1,5 +1,6 @@
 import os
 import time
+import numpy as np
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("MKL_NUM_THREADS", "2")
 
@@ -108,15 +109,38 @@ def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: 
 def save_session_json(session_id: str):
     if session_id in session_data:
         blob = bucket.blob(f"sessions/{session_id}/session_data.json")
-        blob.upload_from_string(json.dumps(session_data[session_id]), content_type="application/json")
-        blob.make_public()
+        try:
+            # Serialize numpy arrays to lists
+            safe_data = {}
+            for k, v in session_data[session_id].items():
+                if isinstance(v, np.ndarray):
+                    safe_data[k] = v.tolist()
+                elif isinstance(v, dict):
+                    safe_data[k] = {
+                        sk: (sv.tolist() if isinstance(sv, np.ndarray) else sv)
+                        for sk, sv in v.items()
+                    }
+                else:
+                    safe_data[k] = v
+            blob.upload_from_string(json.dumps(safe_data), content_type="application/json")
+            blob.make_public()
+            logger.info(f"✅ Session {session_id} saved.")
+        except Exception as e:
+            logger.error(f"❌ Failed to save session {session_id}: {e}")
 
 def load_session_json(session_id: str):
     try:
         blob = bucket.blob(f"sessions/{session_id}/session_data.json")
         if blob.exists():
             session_json = blob.download_as_string()
-            session_data[session_id] = json.loads(session_json)
+            data = json.loads(session_json)
+
+            # Restore numpy arrays
+            if "cv_embeddings" in data:
+                data["cv_embeddings"] = np.array(data["cv_embeddings"])
+
+            session_data[session_id] = data
+            logger.info(f"✅ Session {session_id} loaded from Firebase.")
             return True
     except Exception as e:
         logger.warning(f"Failed to load session {session_id} from Firebase: {e}")
