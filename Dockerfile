@@ -42,7 +42,7 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Clone llama.cpp and build AVX2-safe binary
+# 5. Clone llama.cpp and build AVX2-safe binary with logs
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     echo "📂 Cloned llama.cpp" && \
     mkdir -p /llama.cpp/models && \
@@ -52,10 +52,12 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp && \
     cd /llama.cpp && mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)" && \
-    echo "🔍 Listing built binaries:" && \
-    find bin -type f -executable -exec ls -lh {} \; && \
+    echo "🔍 Listing contents of /llama.cpp/build/bin:" && \
+    ls -lh /llama.cpp/build/bin && \
+    echo "🔍 Listing all executables in build directory:" && \
+    find /llama.cpp/build -type f -executable -exec ls -lh {} \; && \
     mkdir -p /llama/bin && \
-    cp -r ./bin/* /llama/bin/
+    cp -r /llama.cpp/build/bin/* /llama/bin/
 RUN echo "✅ Finished building llama.cpp"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
