@@ -206,8 +206,10 @@ Only return feedback. Do not repeat this prompt.
             ["/llama/bin/llama", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=60,
+            env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
         )
+
         if result.returncode != 0:
             logger.error("⚠️ LLM subprocess failed")
             logger.error(f"STDOUT: {result.stdout}")
