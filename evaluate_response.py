@@ -207,8 +207,7 @@ Only return feedback. Do not repeat this prompt.
             capture_output=True,
             text=True,
             timeout=60,
-            env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
-        )
+                    )
 
         if result.returncode != 0:
             logger.error("⚠️ LLM subprocess failed")

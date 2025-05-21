@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir faster-whisper
 RUN echo "✅ Installed Python requirements"
 
-# 4. Preload models for faster startup
+# 4. Preload models
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
@@ -42,38 +42,31 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Clone llama.cpp and build the CLI
+# 5. Clone llama.cpp and build statically linked binary
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
-# Download Phi-2 GGUF model
 RUN mkdir -p models && \
     wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf \
     -O models/phi-2.gguf
 
-# Build llama CLI with shared libs disabled
 RUN mkdir build && cd build && \
-    cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
+    cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_CURL=OFF -DBUILD_SHARED_LIBS=OFF && \
     make -j"$(nproc)"
 
-# Debug: List contents of build/bin
-RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin
+# Confirm output and copy static binary only
+RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin && \
+    mkdir -p /llama/bin && \
+    cp ./build/bin/llama /llama/bin/llama && chmod +x /llama/bin/llama
 
-# Copy CLI binary and required shared libraries
-RUN mkdir -p /llama/bin && \
-    cp ./build/bin/llama-cli /llama/bin/llama && \
-    cp ./build/bin/libllama.so /llama/bin/ && \
-    cp ./build/bin/libggml.so /llama/bin/
-
-RUN echo "✅ Built llama CLI and copied shared libs"
+RUN echo "✅ Built static llama binary"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
 
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     HF_HOME=/cache/huggingface \
-    SPACY_CACHE=/cache/spacy \
-    LD_LIBRARY_PATH=/llama/bin
+    SPACY_CACHE=/cache/spacy
 RUN mkdir -p $TRANSFORMERS_CACHE $HF_HOME $SPACY_CACHE
 RUN echo "✅ Created model cache directories"
 
@@ -87,8 +80,8 @@ COPY --from=builder /cache /cache
 COPY --from=builder /app/models /app/models
 
 COPY --from=builder /llama.cpp/models/ /llama/models/
-COPY --from=builder /llama/bin/ /llama/bin/
-RUN echo "✅ Copied llama binary and shared libraries"
+COPY --from=builder /llama/bin/llama /llama/bin/llama
+RUN echo "✅ Copied static llama binary and model"
 
 WORKDIR /app
 COPY . .
