@@ -57,7 +57,7 @@ RUN mkdir build && cd build && \
 # Confirm output and copy static binary only
 RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin && \
     mkdir -p /llama/bin && \
-    cp ./build/bin/llama /llama/bin/llama && chmod +x /llama/bin/llama
+    cp ./build/bin/llama-cli /llama/bin/llama && chmod +x /llama/bin/llama
 
 RUN echo "✅ Built static llama binary"
 
