@@ -200,29 +200,47 @@ Give two short paragraphs of feedback:
 Only return feedback. Do not repeat this prompt.
 """.strip()
 
+    logger.debug(f"🧠 Prompt size: {len(prompt)} chars")
+    logger.debug(f"🧠 Prompt preview: {prompt[:200].replace(chr(10), ' ')}...")
+
+    command = [
+        "/llama/bin/llama",
+        "-m", "/llama/models/phi-2.gguf",
+        "-p", prompt,
+        "-n", "200",
+        "--top_k", "40",
+        "--temp", "0.7"
+    ]
+
     try:
-        logger.debug("🚀 Invoking llama.cpp with prompt")
+        logger.debug(f"🚀 Executing: {' '.join(command)}")
+        start = time.time()
         result = subprocess.run(
-            ["/llama/bin/llama", "-m", "/llama/models/phi-2.gguf", "-p", prompt, "-n", "200", "--top_k", "40", "--temp", "0.7"],
+            command,
             capture_output=True,
             text=True,
-            timeout=60,
-                    )
+            timeout=120,
+            env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
+        )
+        elapsed = time.time() - start
+        logger.debug(f"✅ Subprocess completed in {elapsed:.2f}s (code {result.returncode})")
 
         if result.returncode != 0:
             logger.error("⚠️ LLM subprocess failed")
-            logger.error(f"STDOUT: {result.stdout}")
-            logger.error(f"STDERR: {result.stderr}")
+            logger.error(f"STDOUT:\n{result.stdout.strip()}")
+            logger.error(f"STDERR:\n{result.stderr.strip()}")
             return ["Feedback could not be generated (model execution failed)."]
 
-        lines = result.stdout.strip().split("\n")
-        content = [line.strip() for line in lines if line.strip() and not line.lower().startswith("prompt:")]
+        lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+        content = [line for line in lines if not line.lower().startswith("prompt:")]
+
+        logger.debug(f"📤 Output preview: {content[:2]}")
         return content[:2] if content else ["No meaningful feedback was generated."]
     except subprocess.TimeoutExpired:
-        logger.error("Phi-2 subprocess timed out.")
+        logger.error("❌ Phi-2 subprocess timed out.")
         return ["Feedback generation took too long. Try a shorter answer."]
     except Exception:
-        logger.exception("Unexpected error during Phi-2 feedback generation")
+        logger.exception("❌ Unexpected error during Phi-2 feedback generation")
         return ["Could not generate feedback. Please try again later."]
 
 def score_response(
