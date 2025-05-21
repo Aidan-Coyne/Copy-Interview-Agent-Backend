@@ -46,20 +46,24 @@ EOF
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
+# Download Phi-2 GGUF model
 RUN mkdir -p models && \
     wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf \
     -O models/phi-2.gguf
 
+# Build llama CLI with shared libs disabled
 RUN mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DLLAMA_CURL=OFF && \
     make -j"$(nproc)"
 
+# Debug: List contents of build/bin
 RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin
 
-# Copy CLI binary and shared library
+# Copy CLI binary and required shared libraries
 RUN mkdir -p /llama/bin && \
     cp ./build/bin/llama-cli /llama/bin/llama && \
-    cp ./build/bin/libllama.so /llama/bin/
+    cp ./build/bin/libllama.so /llama/bin/ && \
+    cp ./build/bin/libggml.so /llama/bin/
 
 RUN echo "✅ Built llama CLI and copied shared libs"
 
