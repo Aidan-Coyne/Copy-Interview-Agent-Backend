@@ -51,7 +51,7 @@ RUN mkdir -p models && \
     -O models/phi-2.gguf
 
 RUN mkdir build && cd build && \
-    cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DBUILD_SHARED_LIBS=OFF && \
+    cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DBUILD_SHARED_LIBS=OFF DLLAMA_CURL=OFF && \
     make -j"$(nproc)"
 
 RUN mkdir -p /llama/bin && cp ./build/bin/llama /llama/bin/llama
