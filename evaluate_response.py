@@ -188,10 +188,10 @@ def generate_phi2_feedback(question: str, answer: str) -> List[str]:
 You are an interview coach helping a candidate improve their answer.
 
 QUESTION:
-"{question.strip()[:300]}"
+"{question.strip()[:200]}"
 
 ANSWER:
-"{answer.strip()[:400]}"
+"{answer.strip()[:300]}"
 
 Give two short paragraphs of feedback:
 1. Mention one strong or effective part of the answer. Quote the exact phrase and say why it’s good.
@@ -207,7 +207,7 @@ Only return feedback. Do not repeat this prompt.
         "/llama/bin/llama",
         "-m", "/llama/models/phi-2.gguf",
         "-p", prompt,
-        "-n", "200",
+        "-n", "100",
         "--top_k", "40",
         "--temp", "0.7"
     ]
