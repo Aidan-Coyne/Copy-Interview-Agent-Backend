@@ -1,4 +1,4 @@
-# ─── STAGE 1: Build & cache everything ────────────────────────────────────────
+# ─── STAGE 1: build & cache everything ────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
 # 1. Install system dependencies
@@ -19,7 +19,7 @@ ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
     SPACY_CACHE=/cache/spacy
 RUN echo "✅ Set model cache environment variables"
 
-# 3. Install Python packages (split for caching)
+# 3. Install Python packages
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -42,26 +42,26 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Clone llama.cpp and build static binary
+# 5. Clone llama.cpp and build statically linked binary
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
-# 6. Download GGUF model
 RUN mkdir -p models && \
     wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
     -O models/tinyllama.gguf
 
-# 7. Compile llama.cpp
 RUN mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_CURL=OFF -DBUILD_SHARED_LIBS=OFF && \
     make -j"$(nproc)"
 
-# 8. Copy compiled binary
-RUN mkdir -p /llama/bin && \
+# Confirm output and copy static binary only
+RUN echo "🔍 Contents of build/bin:" && ls -lh ./build/bin && \
+    mkdir -p /llama/bin && \
     cp ./build/bin/llama-cli /llama/bin/llama && chmod +x /llama/bin/llama
+
 RUN echo "✅ Built static llama binary"
 
-# ─── STAGE 2: Runtime image ───────────────────────────────────────────────────
+# ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
 
 ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
@@ -70,21 +70,19 @@ ENV TRANSFORMERS_CACHE=/cache/huggingface/transformers \
 RUN mkdir -p $TRANSFORMERS_CACHE $HF_HOME $SPACY_CACHE
 RUN echo "✅ Created model cache directories"
 
-# Install runtime deps
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 RUN echo "✅ Installed runtime system dependencies"
 
-# Copy dependencies and models
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /cache /cache
 COPY --from=builder /app/models /app/models
+
 COPY --from=builder /llama.cpp/models/ /llama/models/
 COPY --from=builder /llama/bin/llama /llama/bin/llama
 RUN echo "✅ Copied static llama binary and model"
 
-# App source
 WORKDIR /app
 COPY . .
 
