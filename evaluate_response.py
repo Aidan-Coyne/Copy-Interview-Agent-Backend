@@ -18,6 +18,7 @@ import numpy as np
 import webrtcvad
 from faster_whisper import WhisperModel
 from transformers import AutoTokenizer
+import openai
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -33,6 +34,9 @@ session = ort.InferenceSession(MODEL_PATH)
 
 # ✅ Load SpaCy
 nlp = spacy.load("en_core_web_sm")
+
+# ✅ OpenAI Key
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 FILLER_WORDS = {
     "um", "uh", "like", "you know", "i mean", "basically", "sort of", "kind of", "er", "erm"
@@ -154,77 +158,40 @@ def clarity_score(r: str, wav_bytes: bytes) -> float:
     filler_penalty = min(0.05 * filler_count, 0.25)
     return 100 * (1 - pause_penalty) * (1 - filler_penalty)
 
-def pick_feedback(area: str, score: float) -> str:
-    tier = get_tier(score)
-    return random.choice(TEMPLATES.get(area, {}).get(tier, [""]))
+def generate_openai_feedback(question: str, answer: str) -> List[str]:
+    prompt = (
+        f"You are evaluating a candidate's spoken interview answer.\n\n"
+        f"Question:\n\"{question}\"\n\n"
+        f"Answer:\n\"{answer}\"\n\n"
+        f"Give concise feedback in two sections:\n"
+        f"1. What they did well (quote strong phrases).\n"
+        f"2. What could be improved (clarify, expand, structure).\n\n"
+        f"Keep it helpful and professional."
+    )
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=150,
+        )
+        content = response.choices[0].message['content'].strip()
+        return content.split("\n\n")
+    except Exception as e:
+        logger.error(f"OpenAI feedback failed: {e}")
+        return ["(LLM Feedback error)"]
 
-TIERS = [(40, "needs_improvement"), (70, "on_track")]
 def get_tier(score: float) -> str:
-    for thresh, name in TIERS:
-        if score < thresh:
-            return name
+    if score < 40:
+        return "needs_improvement"
+    elif score < 70:
+        return "on_track"
     return "strong"
 
-TEMPLATES = {
-    "Topic Fit": {
-        "needs_improvement": ["Make sure your answer matches the main topic more closely."],
-        "on_track": ["Good topic match—just tighten up the phrasing."],
-        "strong": ["Excellent topic alignment!"]
-    },
-    "Clear Answer": {
-        "needs_improvement": ["Try to reduce long pauses and keep focus."],
-        "on_track": ["Your answer is clear—nice flow."],
-        "strong": ["Excellent clarity and flow!"]
-    },
-    "Question Terms Used": {
-        "needs_improvement": ["Include more of the question’s exact words to show relevance."],
-        "on_track": ["Good use of key terms—add synonyms to show range."],
-        "strong": ["Great keyword coverage!"]
-    }
-}
-
-def generate_tinyllama_feedback(question: str, answer: str) -> List[str]:
-    prompt = f"Feedback on: {answer.strip()[:50]}"
-    command = [
-        "/llama/bin/llama",
-        "-m", "/llama/models/tinyllama.gguf",
-        "-p", prompt,
-        "-n", "20",
-        "--top_k", "10",
-        "--temp", "0.9"
-    ]
-    try:
-        logger.debug(f"🧠 Prompt: {prompt}")
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
-        )
-        if result.returncode != 0:
-            logger.error("❌ TinyLlama subprocess failed")
-            return ["[LLM error]"]
-
-        lines = result.stdout.strip().split("\n")
-        content = [line.strip() for line in lines if line.strip()]
-        return content[:1] or ["(no output)"]
-    except subprocess.TimeoutExpired:
-        logger.error("❌ TinyLlama subprocess timed out.")
-        return ["(timed out)"]
-    except Exception:
-        logger.exception("❌ TinyLlama subprocess crashed.")
-        return ["(crashed)"]
-
-
-def score_response(
-    response_text: str,
-    question_text: str,
-    relevant_keywords: List[str],
-    question_type: str,
-    company_sector: Optional[str] = None,
-    wav_bytes: bytes = b""
-) -> Dict[str, Any]:
+def score_response(response_text: str, question_text: str, relevant_keywords: List[str], question_type: str, company_sector: Optional[str] = None, wav_bytes: bytes = b"") -> Dict[str, Any]:
     start_time = time.time()
     logger.info("⏳ Starting evaluation pipeline")
 
@@ -252,24 +219,21 @@ def score_response(
         {"area": "Relevance Breakdown", "feedback": f"Topic Fit: {sem:.1f}%  •  Clarity: {clr:.1f}%  •  Question Terms Used: {qterms:.1f}%"}
     ]
 
-    if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": pick_feedback("Topic Fit", sem)})
-    if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": pick_feedback("Clear Answer", clr)})
-    if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": pick_feedback("Question Terms Used", qterms)})
+    if sem < 70:
+        suggestions.append({"area": "Topic Fit", "feedback": "Consider aligning your answer more closely with the main topic."})
+    if clr < 70:
+        suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce long pauses and avoid filler words."})
+    if qterms < 70:
+        suggestions.append({"area": "Question Terms Used", "feedback": "Use key terms from the question to demonstrate focus."})
     if count_filler_words(response_text) > 0:
-        suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce filler words like 'uh', 'like', or 'you know'."})
+        suggestions.append({"area": "Clear Answer", "feedback": "Reduce filler words like 'uh', 'like', or 'you know'."})
     if missing:
         suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
-    if question_type == "behavioral":
-        suggestions.append({"area": "Behavioral Structure", "feedback": "Use STAR (Situation, Task, Action, Result)."})
-    elif question_type == "situational":
-        suggestions.append({"area": "Situational Strategy", "feedback": "Outline your reasoning steps clearly."})
-    elif question_type == "technical":
-        suggestions.append({"area": "Technical Depth", "feedback": "Include specific tools or concrete examples."})
     if len(response_text.split()) < 20:
-        suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
+        suggestions.append({"area": "Detail & Depth", "feedback": "Expand your answer with more detail or examples."})
 
     try:
-        paragraphs = generate_tinyllama_feedback(question_text, response_text)
+        paragraphs = generate_openai_feedback(question_text, response_text)
         for p in paragraphs:
             suggestions.append({"area": "Personalized Feedback", "feedback": p})
     except Exception:
