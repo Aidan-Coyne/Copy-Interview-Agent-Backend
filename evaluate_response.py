@@ -141,32 +141,60 @@ def clarity_score(r: str, wav_bytes: bytes) -> float:
     filler_penalty = min(0.05 * count_filler_words(r), 0.25)
     return 100 * (1 - pause_penalty) * (1 - filler_penalty)
 
-def generate_openai_feedback(question: str, answer: str) -> List[str]:
+from typing import List
+from app_cache import get_cached_prompt, cache_prompt_to_firestore, get_question_hash  # your cache module
+import logging
+
+logger = logging.getLogger(__name__)
+
+def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecified") -> List[str]:
     try:
+        # Try to get the prompt structure from Firestore
+        cached_messages = get_cached_prompt(question)
+
+        if not cached_messages:
+            # Fallback: construct prompt and cache it
+            cached_messages = [
+                {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
+                {"role": "user", "content": f"""You are evaluating a candidate's interview answer.
+
+            Question:
+            \"{question}\"
+
+            Answer:
+            \"{{ANSWER_PLACEHOLDER}}\"
+
+            Provide feedback in two clear paragraphs:
+            1. What they did well (quote strong phrases).
+            2. What could be improved (clarify, expand, structure).
+            Keep it supportive, concise, and actionable."""}
+            ]
+            cache_prompt_to_firestore(question, cached_messages, q_type)
+            logger.info(f"Prompt cached for question hash {get_question_hash(question)}")
+
+        # Replace placeholder with actual answer
+        final_messages = [
+            msg if msg["role"] == "system" else {
+                "role": "user",
+                "content": msg["content"].replace("{{ANSWER_PLACEHOLDER}}", answer)
+            }
+            for msg in cached_messages
+        ]
+
+        # Send request to OpenAI
         result = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
-                {"role": "user", "content": f"""You are evaluating a candidate's spoken interview answer.
-
-                Question:
-                \"{question}\"
-
-                Answer:
-                \"{answer}\"
-
-                Provide structured feedback:
-                1. What they did well (quote strong phrases).
-                2. What could be improved (clarify, expand, structure).
-                Keep it supportive, concise, and actionable."""}
-                            ],
+            messages=final_messages,
             temperature=0.7,
-            max_tokens=150,
+            max_tokens=80,
         )
+
         return result.choices[0].message.content.strip().split("\n\n")
+
     except Exception as e:
         logger.error(f"OpenAI feedback failed: {e}")
         return ["(LLM Feedback error)"]
+
 
 def get_tier(score: float) -> str:
     return "needs_improvement" if score < 40 else "on_track" if score < 70 else "strong"
