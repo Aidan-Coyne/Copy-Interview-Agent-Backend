@@ -184,54 +184,38 @@ TEMPLATES = {
 }
 
 def generate_tinyllama_feedback(question: str, answer: str) -> List[str]:
-    prompt = f"""
-Tell me one good thing about this answer and one way to improve it.
-
-Answer: {answer.strip()[:100]}
-""".strip()
-
-    logger.debug(f"🧠 Prompt size: {len(prompt)} chars")
-    logger.debug(f"🧠 Prompt preview: {prompt[:200].replace(chr(10), ' ')}...")
-
+    prompt = f"Feedback on: {answer.strip()[:50]}"
     command = [
         "/llama/bin/llama",
         "-m", "/llama/models/tinyllama.gguf",
         "-p", prompt,
-        "-n", "40",
-        "--top_k", "20",
-        "--temp", "0.8"
+        "-n", "20",
+        "--top_k", "10",
+        "--temp", "0.9"
     ]
-
     try:
-        logger.debug(f"🚀 Executing: {' '.join(command)}")
-        start = time.time()
+        logger.debug(f"🧠 Prompt: {prompt}")
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=20,
             env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
         )
-        elapsed = time.time() - start
-        logger.debug(f"✅ Subprocess completed in {elapsed:.2f}s (code {result.returncode})")
-
         if result.returncode != 0:
-            logger.error("⚠️ LLM subprocess failed")
-            logger.error(f"STDOUT:\n{result.stdout.strip()}")
-            logger.error(f"STDERR:\n{result.stderr.strip()}")
-            return ["Feedback could not be generated (model execution failed)."]
+            logger.error("❌ TinyLlama subprocess failed")
+            return ["[LLM error]"]
 
-        lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        content = [line for line in lines if not line.lower().startswith("prompt:")]
-
-        logger.debug(f"📤 Output preview: {content[:2]}")
-        return content[:2] if content else ["No meaningful feedback was generated."]
+        lines = result.stdout.strip().split("\n")
+        content = [line.strip() for line in lines if line.strip()]
+        return content[:1] or ["(no output)"]
     except subprocess.TimeoutExpired:
         logger.error("❌ TinyLlama subprocess timed out.")
-        return ["Feedback generation took too long. Try a shorter answer."]
+        return ["(timed out)"]
     except Exception:
-        logger.exception("❌ Unexpected error during TinyLlama feedback generation")
-        return ["Could not generate feedback. Please try again later."]
+        logger.exception("❌ TinyLlama subprocess crashed.")
+        return ["(crashed)"]
+
 
 def score_response(
     response_text: str,
