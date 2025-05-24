@@ -185,19 +185,9 @@ TEMPLATES = {
 
 def generate_tinyllama_feedback(question: str, answer: str) -> List[str]:
     prompt = f"""
-You are an interview coach helping a candidate improve their answer.
+Tell me one good thing about this answer and one way to improve it.
 
-QUESTION:
-"{question.strip()[:200]}"
-
-ANSWER:
-"{answer.strip()[:300]}"
-
-Give two short paragraphs of feedback:
-1. Mention one strong or effective part of the answer. Quote the exact phrase and say why it’s good.
-2. Suggest one improvement. Be specific and avoid repeating the question.
-
-Only return feedback. Do not repeat this prompt.
+Answer: {answer.strip()[:100]}
 """.strip()
 
     logger.debug(f"🧠 Prompt size: {len(prompt)} chars")
@@ -207,9 +197,9 @@ Only return feedback. Do not repeat this prompt.
         "/llama/bin/llama",
         "-m", "/llama/models/tinyllama.gguf",
         "-p", prompt,
-        "-n", "100",
-        "--top_k", "40",
-        "--temp", "0.7"
+        "-n", "40",
+        "--top_k", "20",
+        "--temp", "0.8"
     ]
 
     try:
@@ -219,7 +209,7 @@ Only return feedback. Do not repeat this prompt.
             command,
             capture_output=True,
             text=True,
-            timeout=90,
+            timeout=30,
             env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
         )
         elapsed = time.time() - start
