@@ -4,7 +4,6 @@ import wave
 import string
 import logging
 import subprocess
-import random
 import time
 import re
 import tempfile
@@ -18,10 +17,13 @@ import numpy as np
 import webrtcvad
 from faster_whisper import WhisperModel
 from transformers import AutoTokenizer
-import openai
+from openai import OpenAI
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# ✅ Initialize OpenAI Client
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ✅ Load FasterWhisper tiny model
 whisper_model = WhisperModel("tiny", compute_type="int8")
@@ -34,9 +36,6 @@ session = ort.InferenceSession(MODEL_PATH)
 
 # ✅ Load SpaCy
 nlp = spacy.load("en_core_web_sm")
-
-# ✅ OpenAI Key
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 FILLER_WORDS = {
     "um", "uh", "like", "you know", "i mean", "basically", "sort of", "kind of", "er", "erm"
@@ -159,27 +158,28 @@ def clarity_score(r: str, wav_bytes: bytes) -> float:
     return 100 * (1 - pause_penalty) * (1 - filler_penalty)
 
 def generate_openai_feedback(question: str, answer: str) -> List[str]:
-    prompt = (
-        f"You are evaluating a candidate's spoken interview answer.\n\n"
-        f"Question:\n\"{question}\"\n\n"
-        f"Answer:\n\"{answer}\"\n\n"
-        f"Give concise feedback in two sections:\n"
-        f"1. What they did well (quote strong phrases).\n"
-        f"2. What could be improved (clarify, expand, structure).\n\n"
-        f"Keep it helpful and professional."
-    )
     try:
-        response = openai.ChatCompletion.create(
+        response = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": f"""You are evaluating a candidate's spoken interview answer.
+
+Question:
+\"{question}\"
+
+Answer:
+\"{answer}\"
+
+Provide structured feedback:
+1. What they did well (quote strong phrases).
+2. What could be improved (clarify, expand, structure).
+Keep it supportive, concise, and actionable."""}
             ],
             temperature=0.7,
-            max_tokens=150,
+            max_tokens=300,
         )
-        content = response.choices[0].message['content'].strip()
-        return content.split("\n\n")
+        return response.choices[0].message.content.strip().split("\n\n")
     except Exception as e:
         logger.error(f"OpenAI feedback failed: {e}")
         return ["(LLM Feedback error)"]
@@ -232,12 +232,9 @@ def score_response(response_text: str, question_text: str, relevant_keywords: Li
     if len(response_text.split()) < 20:
         suggestions.append({"area": "Detail & Depth", "feedback": "Expand your answer with more detail or examples."})
 
-    try:
-        paragraphs = generate_openai_feedback(question_text, response_text)
-        for p in paragraphs:
-            suggestions.append({"area": "Personalized Feedback", "feedback": p})
-    except Exception:
-        suggestions.append({"area": "Personalized Feedback", "feedback": "Could not generate feedback. Please try again later."})
+    paragraphs = generate_openai_feedback(question_text, response_text)
+    for p in paragraphs:
+        suggestions.append({"area": "Personalized Feedback", "feedback": p})
 
     logger.info(f"✅ Evaluation pipeline completed in {time.time() - start_time:.2f}s")
     return {
