@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # ✅ Initialize OpenAI Client
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = OpenAI()
 
 # ✅ Load FasterWhisper tiny model
 whisper_model = WhisperModel("tiny", compute_type="int8")
