@@ -22,11 +22,16 @@ RUN echo "✅ Set model cache environment variables"
 # 3. Install Python packages
 WORKDIR /build
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir faster-whisper
-RUN echo "✅ Installed Python requirements"
 
-# 4. Preload models
+# Use pip cache for faster rebuilds (requires BuildKit)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
+
+# 4. Install spacy model separately for Docker layer caching
+RUN pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+RUN echo "✅ Installed spaCy model"
+
+# 5. Preload models
 RUN python - <<EOF
 import spacy, onnxruntime
 from sentence_transformers import SentenceTransformer
@@ -34,7 +39,7 @@ from transformers import AutoTokenizer
 from faster_whisper import WhisperModel
 
 print("📦 Downloading models...")
-spacy.cli.download("en_core_web_sm")
+spacy.load("en_core_web_sm")
 SentenceTransformer("all-MiniLM-L6-v2")
 AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 WhisperModel("tiny", download_root="/app/models", compute_type="int8")
@@ -42,7 +47,7 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Clone llama.cpp and build statically linked binary
+# 6. Clone llama.cpp and build static binary
 RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
