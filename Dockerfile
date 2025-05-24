@@ -36,7 +36,7 @@ from faster_whisper import WhisperModel
 print("📦 Downloading models...")
 spacy.cli.download("en_core_web_sm")
 SentenceTransformer("all-MiniLM-L6-v2")
-AutoTokenizer.from_pretrained("microsoft/phi-2")
+AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0")
 WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
@@ -47,8 +47,8 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git /llama.cpp
 WORKDIR /llama.cpp
 
 RUN mkdir -p models && \
-    wget https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf \
-    -O models/phi-2.gguf
+    wget https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
+    -O models/tinyllama.gguf
 
 RUN mkdir build && cd build && \
     cmake .. -DLLAMA_AVX2=ON -DLLAMA_AVX512=OFF -DLLAMA_CURL=OFF -DBUILD_SHARED_LIBS=OFF && \

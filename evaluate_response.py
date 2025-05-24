@@ -183,7 +183,7 @@ TEMPLATES = {
     }
 }
 
-def generate_phi2_feedback(question: str, answer: str) -> List[str]:
+def generate_tinyllama_feedback(question: str, answer: str) -> List[str]:
     prompt = f"""
 You are an interview coach helping a candidate improve their answer.
 
@@ -205,7 +205,7 @@ Only return feedback. Do not repeat this prompt.
 
     command = [
         "/llama/bin/llama",
-        "-m", "/llama/models/phi-2.gguf",
+        "-m", "/llama/models/tinyllama.gguf",
         "-p", prompt,
         "-n", "100",
         "--top_k", "40",
@@ -219,7 +219,7 @@ Only return feedback. Do not repeat this prompt.
             command,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=90,
             env={**os.environ, "LD_LIBRARY_PATH": "/llama/bin"}
         )
         elapsed = time.time() - start
@@ -237,10 +237,10 @@ Only return feedback. Do not repeat this prompt.
         logger.debug(f"📤 Output preview: {content[:2]}")
         return content[:2] if content else ["No meaningful feedback was generated."]
     except subprocess.TimeoutExpired:
-        logger.error("❌ Phi-2 subprocess timed out.")
+        logger.error("❌ TinyLlama subprocess timed out.")
         return ["Feedback generation took too long. Try a shorter answer."]
     except Exception:
-        logger.exception("❌ Unexpected error during Phi-2 feedback generation")
+        logger.exception("❌ Unexpected error during TinyLlama feedback generation")
         return ["Could not generate feedback. Please try again later."]
 
 def score_response(
@@ -295,7 +295,7 @@ def score_response(
         suggestions.append({"area": "Detail & Depth", "feedback": "Expand with examples or explanations."})
 
     try:
-        paragraphs = generate_phi2_feedback(question_text, response_text)
+        paragraphs = generate_tinyllama_feedback(question_text, response_text)
         for p in paragraphs:
             suggestions.append({"area": "Personalized Feedback", "feedback": p})
     except Exception:
