@@ -3,6 +3,7 @@ import json
 import hashlib
 import firebase_admin
 from firebase_admin import credentials, firestore
+from typing import Optional
 
 # --- 1. FIRESTORE INITIALIZATION USING ENV ---
 def initialize_firestore_from_env():
@@ -33,6 +34,15 @@ def cache_prompt_to_firestore(question: str, messages: list[dict], q_type: str =
         "prompt": messages,
         "type": q_type
     }, merge=True)
+
+def get_cached_prompt(question: str) -> Optional[list[dict]]:
+    doc_id = get_question_hash(question)
+    doc_ref = db.collection("prompt_templates").document(doc_id)
+    doc = doc_ref.get()
+    if doc.exists:
+        data = doc.to_dict()
+        return data.get("prompt")
+    return None
 
 def is_static_question(question: str) -> bool:
     dynamic_keywords = [
