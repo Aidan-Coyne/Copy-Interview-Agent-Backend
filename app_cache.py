@@ -20,8 +20,11 @@ def initialize_firestore_from_env():
 db = initialize_firestore_from_env()
 
 # --- 2. UTILS ---
+def normalize_question(q: str) -> str:
+    return q.strip().lower()
+
 def get_question_hash(question: str) -> str:
-    return hashlib.sha256(question.strip().encode()).hexdigest()
+    return hashlib.sha256(normalize_question(question).encode()).hexdigest()
 
 def cache_prompt_to_firestore(question: str, messages: list[dict], q_type: str = "unspecified"):
     doc_id = get_question_hash(question)
@@ -39,9 +42,6 @@ def is_static_question(question: str) -> bool:
     return not any(keyword in question for keyword in dynamic_keywords)
 
 # --- 3. QUESTION DATA ---
-# Paste your full `technical_questions`, `behavioral_questions`, and `situational_questions` lists here,
-# as you've already written them. I'll just simulate the minimal static ones to illustrate:
-
 technical_questions = [
     ("technical", "Describe a situation where you had to overcome a challenging technical problem."),
     ("technical", "How do you stay updated with the latest advancements in your field?"),
@@ -63,7 +63,6 @@ technical_questions = [
     ("technical", "How do you collaborate with non-technical team members?")
 ]
 
-# Behavioral and situational as-is
 behavioral_questions = [
     ("behavioral", "Can you share an example of how you adapted to new tools or methods?"),
     ("behavioral", "Tell me about a project where your input was critical to its success."),
@@ -129,18 +128,19 @@ situational_questions = [
     ]
 ]
 
-# --- 4. CACHE STATIC QUESTIONS TO FIRESTORE ---
-all_questions = technical_questions + behavioral_questions + situational_questions
+# --- 4. MAIN EXECUTION BLOCK ---
+if __name__ == "__main__":
+    print("📦 Starting prompt cache preload...")
+    all_questions = technical_questions + behavioral_questions + situational_questions
 
-for q_type, question in all_questions:
-    if not question or not is_static_question(question):
-        print(f"❌ Skipped dynamic: {question}")
-        continue
+    for q_type, question in all_questions:
+        if not question or not is_static_question(question):
+            print(f"❌ Skipped dynamic: {question}")
+            continue
 
-    # Build prompt messages (GPT format)
-    messages = [
-        {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
-        {"role": "user", "content": f"""You are evaluating a candidate's interview answer.
+        messages = [
+            {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
+            {"role": "user", "content": f"""You are evaluating a candidate's interview answer.
 
 Question:
 \"{question}\"
@@ -152,7 +152,7 @@ Provide feedback in two clear paragraphs:
 1. What they did well (quote strong phrases).
 2. What could be improved (clarify, expand, structure).
 Keep it supportive, concise, and actionable."""}
-    ]
+        ]
 
-    cache_prompt_to_firestore(question, messages, q_type)
-    print(f"✅ Cached: {question}")
+        cache_prompt_to_firestore(question, messages, q_type)
+        print(f"✅ Cached: {question}")
