@@ -1,0 +1,5 @@
+{
+  "build": {
+    "env": ["GOOGLE_APPLICATION_CREDENTIALS_JSON"]
+  }
+}
