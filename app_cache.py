@@ -29,7 +29,7 @@ def get_question_hash(question: str) -> str:
 
 def cache_prompt_to_firestore(question: str, messages: list[dict], q_type: str = "unspecified"):
     doc_id = get_question_hash(question)
-    db.collection("prompt_templates").document(doc_id).set({
+    db.collection("interview-agent-prompts").document(doc_id).set({
         "question": question,
         "prompt": messages,
         "type": q_type
@@ -37,7 +37,7 @@ def cache_prompt_to_firestore(question: str, messages: list[dict], q_type: str =
 
 def get_cached_prompt(question: str) -> Optional[list[dict]]:
     doc_id = get_question_hash(question)
-    doc_ref = db.collection("prompt_templates").document(doc_id)
+    doc_ref = db.collection("interview-agent-prompts").document(doc_id)
     doc = doc_ref.get()
     if doc.exists:
         data = doc.to_dict()
