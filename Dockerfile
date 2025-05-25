@@ -41,12 +41,6 @@ _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
 
-# 5. Copy app source code & preload prompt cache
-COPY . /app
-WORKDIR /app
-RUN python app_cache.py
-RUN echo "✅ Preloaded Firestore prompt cache"
-
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
 
