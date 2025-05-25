@@ -20,7 +20,7 @@ from typing import Dict
 from keyword_extraction import onnx_embedder
 
 import firebase_admin
-from firebase_admin import credentials, storage
+from firebase_admin import credentials, storage, firestore
 
 print("🔥 FastAPI app starting…")
 app = FastAPI()
@@ -71,6 +71,27 @@ if google_creds_json:
         bucket = storage.bucket()
         if not bucket:
             logger.error("❌ Firebase bucket returned None.")
+
+        # ✅ Upload app_cache.py to Firestore
+        def upload_app_cache_to_firestore():
+            try:
+                db = firestore.client()
+                with open("/app/app_cache.py", "r") as f:
+                    source_code = f.read()
+
+                doc_ref = db.collection("build_artifacts").document("app_cache")
+                doc_ref.set({
+                    "filename": "app_cache.py",
+                    "content": source_code,
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                }, merge=True)
+
+                logger.info("✅ app_cache.py uploaded to Firestore.")
+            except Exception as e:
+                logger.error(f"❌ Failed to upload app_cache.py to Firestore: {e}")
+
+        upload_app_cache_to_firestore()
+
     except Exception as e:
         logger.error(f"❌ Firebase initialization failed: {e}")
 else:
