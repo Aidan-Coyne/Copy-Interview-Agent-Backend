@@ -21,7 +21,7 @@ RUN echo "✅ Set model cache environment variables"
 
 # 3. Install Python packages
 WORKDIR /build
-COPY requirements.txt .
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 RUN echo "✅ Installed Python requirements"
 
@@ -40,6 +40,12 @@ WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 _ = onnxruntime.get_device()
 print("✅ Finished downloading models")
 EOF
+
+# 5. Copy app source code & preload prompt cache
+COPY . /app
+WORKDIR /app
+RUN python app_cache.py
+RUN echo "✅ Preloaded Firestore prompt cache"
 
 # ─── STAGE 2: minimal runtime image ───────────────────────────────────────────
 FROM python:3.12-slim
