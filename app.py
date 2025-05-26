@@ -120,14 +120,19 @@ def get_supabase_user_id(request: Request) -> str:
 
     token = auth_header.split(" ")[1]
     supabase_url = os.getenv("SUPABASE_URL")
-    if not supabase_url:
-        logging.error("❌ Supabase URL not set")
-        raise HTTPException(status_code=500, detail="Supabase URL not set.")
+    supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
+
+    if not supabase_url or not supabase_anon_key:
+        logging.error("❌ Supabase credentials not set properly.")
+        raise HTTPException(status_code=500, detail="Supabase credentials not set.")
 
     try:
         response = requests.get(
             f"{supabase_url}/auth/v1/user",
-            headers={"Authorization": f"Bearer {token}"}
+            headers={
+                "Authorization": f"Bearer {token}",
+                "apikey": supabase_anon_key
+            }
         )
         logging.info(f"🔁 Supabase user lookup status: {response.status_code}")
         logging.debug(f"🧾 Supabase response: {response.text}")
@@ -137,6 +142,7 @@ def get_supabase_user_id(request: Request) -> str:
     except Exception as e:
         logging.error(f"❌ Supabase token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Please login to continue.")
+
 
 # ✅ Supabase usage logger
 def log_usage_to_supabase(user_id: str, tokens_used: int, request_type: str):
