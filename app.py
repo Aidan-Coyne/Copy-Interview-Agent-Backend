@@ -114,25 +114,25 @@ session_data: Dict[str, Dict] = {}
 def get_supabase_user_id(request: Request) -> str:
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+        raise HTTPException(status_code=401, detail="Please login to continue.")
     
     token = auth_header.split(" ")[1]
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-    if not supabase_url or not supabase_key:
-        raise HTTPException(status_code=500, detail="Supabase environment variables not set.")
+    if not supabase_url:
+        raise HTTPException(status_code=500, detail="Supabase URL not set.")
 
     try:
         response = requests.get(
             f"{supabase_url}/auth/v1/user",
-            headers={"Authorization": f"Bearer {token}", "apikey": supabase_key}
+            headers={"Authorization": f"Bearer {token}"}
         )
         response.raise_for_status()
         user_data = response.json()
         return user_data.get("id")
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Unauthorized: {str(e)}")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Please login to continue.")
+
 
 # ✅ Supabase usage logger
 def log_usage_to_supabase(user_id: str, tokens_used: int, request_type: str):
