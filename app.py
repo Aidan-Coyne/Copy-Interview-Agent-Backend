@@ -110,16 +110,18 @@ except Exception as e:
 
 session_data: Dict[str, Dict] = {}
 
-# ✅ Supabase user extraction
 def get_supabase_user_id(request: Request) -> str:
     auth_header = request.headers.get("Authorization")
+    logging.info(f"🔍 Incoming Authorization header: {auth_header}")
+
     if not auth_header or not auth_header.startswith("Bearer "):
+        logging.warning("⚠️ Missing or invalid Authorization header")
         raise HTTPException(status_code=401, detail="Please login to continue.")
-    
+
     token = auth_header.split(" ")[1]
     supabase_url = os.getenv("SUPABASE_URL")
-
     if not supabase_url:
+        logging.error("❌ Supabase URL not set")
         raise HTTPException(status_code=500, detail="Supabase URL not set.")
 
     try:
@@ -127,12 +129,14 @@ def get_supabase_user_id(request: Request) -> str:
             f"{supabase_url}/auth/v1/user",
             headers={"Authorization": f"Bearer {token}"}
         )
+        logging.info(f"🔁 Supabase user lookup status: {response.status_code}")
+        logging.debug(f"🧾 Supabase response: {response.text}")
         response.raise_for_status()
         user_data = response.json()
         return user_data.get("id")
-    except Exception:
+    except Exception as e:
+        logging.error(f"❌ Supabase token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Please login to continue.")
-
 
 # ✅ Supabase usage logger
 def log_usage_to_supabase(user_id: str, tokens_used: int, request_type: str):
