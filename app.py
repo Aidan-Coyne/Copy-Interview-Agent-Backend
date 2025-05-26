@@ -262,7 +262,11 @@ async def upload_cv(
         session_id=session_id,
         cv_embeddings=cv_embeddings,
         cv_keywords=cv_keywords
-    )
+
+        )
+    
+    # ✅ Log question generation after receiving data
+    log_usage_to_supabase(user_id, tokens_used=len(json.dumps(questions_data).split()), request_type="generate_questions")
 
     session_data[session_id].update({
         "company_info": company_info_json,
@@ -272,9 +276,6 @@ async def upload_cv(
     })
 
     save_session_json(session_id)
-
-    # 🔥 Log token usage
-    log_usage_to_supabase(user_id, tokens_used=len(cv_text.split()), request_type="upload_cv")
 
     return {
         "session_id": session_id,
