@@ -16,6 +16,7 @@ import uvicorn
 import logging
 import json
 import tempfile
+import requests
 from typing import Dict
 from keyword_extraction import onnx_embedder
 
@@ -72,20 +73,17 @@ if google_creds_json:
         if not bucket:
             logger.error("❌ Firebase bucket returned None.")
 
-        # ✅ Upload app_cache.py to Firestore
         def upload_app_cache_to_firestore():
             try:
                 db = firestore.client()
                 with open("/app/app_cache.py", "r") as f:
                     source_code = f.read()
-
                 doc_ref = db.collection("build_artifacts").document("app_cache")
                 doc_ref.set({
                     "filename": "app_cache.py",
                     "content": source_code,
                     "timestamp": firestore.SERVER_TIMESTAMP
                 }, merge=True)
-
                 logger.info("✅ app_cache.py uploaded to Firestore.")
             except Exception as e:
                 logger.error(f"❌ Failed to upload app_cache.py to Firestore: {e}")
@@ -112,6 +110,58 @@ except Exception as e:
 
 session_data: Dict[str, Dict] = {}
 
+# ✅ Supabase user extraction
+def get_supabase_user_id(request: Request) -> str:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header.")
+    
+    token = auth_header.split(" ")[1]
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not supabase_url or not supabase_key:
+        raise HTTPException(status_code=500, detail="Supabase environment variables not set.")
+
+    try:
+        response = requests.get(
+            f"{supabase_url}/auth/v1/user",
+            headers={"Authorization": f"Bearer {token}", "apikey": supabase_key}
+        )
+        response.raise_for_status()
+        user_data = response.json()
+        return user_data.get("id")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Unauthorized: {str(e)}")
+
+# ✅ Supabase usage logger
+def log_usage_to_supabase(user_id: str, tokens_used: int, request_type: str):
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not supabase_url or not supabase_key:
+        logger.warning("Supabase credentials not found for logging.")
+        return
+
+    try:
+        requests.post(
+            f"{supabase_url}/rest/v1/usage_logs",
+            headers={
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+            },
+            json={
+                "user_id": user_id,
+                "tokens_used": tokens_used,
+                "request_type": request_type
+            }
+        )
+        logger.info(f"✅ Usage logged: {tokens_used} tokens for {request_type}")
+    except Exception as e:
+        logger.warning(f"❌ Failed to log usage: {e}")
+
 def upload_to_firebase(file_or_bytes, firebase_bucket, path: str, content_type: str) -> str:
     if not firebase_bucket:
         raise HTTPException(status_code=500, detail="Firebase bucket is not available.")
@@ -131,7 +181,6 @@ def save_session_json(session_id: str):
     if session_id in session_data:
         blob = bucket.blob(f"sessions/{session_id}/session_data.json")
         try:
-            # Serialize numpy arrays to lists
             safe_data = {}
             for k, v in session_data[session_id].items():
                 if isinstance(v, np.ndarray):
@@ -155,11 +204,8 @@ def load_session_json(session_id: str):
         if blob.exists():
             session_json = blob.download_as_string()
             data = json.loads(session_json)
-
-            # Restore numpy arrays
             if "cv_embeddings" in data:
                 data["cv_embeddings"] = np.array(data["cv_embeddings"])
-
             session_data[session_id] = data
             logger.info(f"✅ Session {session_id} loaded from Firebase.")
             return True
@@ -167,17 +213,20 @@ def load_session_json(session_id: str):
         logger.warning(f"Failed to load session {session_id} from Firebase: {e}")
     return False
 
+
 @app.get("/")
 def home():
     return {"message": "Interview Agent Backend Running"}
 
 @app.post("/upload_cv/")
 async def upload_cv(
+    request: Request,
     file: UploadFile = File(...),
     company_name: str = Form(...),
     job_role: str = Form(...),
     question_type: str = Form("mixed")
 ):
+    user_id = get_supabase_user_id(request)
     session_id = f"{company_name}_{job_role}_{file.filename}"
     logger.info(f"Received upload_cv request for session: {session_id}")
 
@@ -224,6 +273,9 @@ async def upload_cv(
 
     save_session_json(session_id)
 
+    # 🔥 Log token usage
+    log_usage_to_supabase(user_id, tokens_used=len(cv_text.split()), request_type="upload_cv")
+
     return {
         "session_id": session_id,
         "cv_text": cv_text,
@@ -234,10 +286,13 @@ async def upload_cv(
 
 @app.post("/evaluate_response/")
 async def evaluate_audio_response(
+    request: Request,
     audio_file: UploadFile = File(...),
     question_index: int = Form(...),
     session_id: str = Form(...)
 ):
+    user_id = get_supabase_user_id(request)
+
     if session_id not in session_data:
         loaded = load_session_json(session_id)
         if not loaded:
@@ -285,6 +340,9 @@ async def evaluate_audio_response(
 
     total_elapsed = time.time() - total_start
     logger.info(f"✅ [evaluate_response] total time: {total_elapsed:.2f}s")
+
+    # 🔥 Log token usage
+    log_usage_to_supabase(user_id, tokens_used=len(response_text.split()), request_type="evaluate_response")
 
     return JSONResponse(content={
         "feedback": result,

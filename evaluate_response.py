@@ -144,10 +144,11 @@ def clarity_score(r: str, wav_bytes: bytes) -> float:
 from typing import List
 from app_cache import get_cached_prompt, cache_prompt_to_firestore, get_question_hash  # your cache module
 import logging
+from usage_logger import log_usage_to_supabase
 
 logger = logging.getLogger(__name__)
 
-def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecified") -> List[str]:
+def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecified", user_id: Optional[str] = None) -> List[str]:
     try:
         # Try to get the prompt structure from Firestore
         cached_messages = get_cached_prompt(question)
@@ -164,10 +165,10 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
             Answer:
             \"{{ANSWER_PLACEHOLDER}}\"
 
-            Provide feedback in two clear paragraphs:
+            Provide feedback in two clear paragraphs in max 80 tokens:
             1. What they did well (quote strong phrases).
             2. What could be improved (clarify, expand, structure).
-            Keep it supportive, concise, and actionable."""}
+            """}
             ]
             cache_prompt_to_firestore(question, cached_messages, q_type)
             logger.info(f"Prompt cached for question hash {get_question_hash(question)}")
@@ -189,6 +190,12 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
             max_tokens=80,
         )
 
+         # ✅ Log token usage to Supabase if user ID is provided
+        if user_id:
+            usage = result.usage
+            total_tokens = usage.prompt_tokens + usage.completion_tokens
+            log_usage_to_supabase(user_id, tokens_used=total_tokens, request_type="generate_openai_feedback")
+
         return result.choices[0].message.content.strip().split("\n\n")
 
     except Exception as e:
@@ -199,7 +206,7 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
 def get_tier(score: float) -> str:
     return "needs_improvement" if score < 40 else "on_track" if score < 70 else "strong"
 
-def score_response(response_text: str, question_text: str, relevant_keywords: List[str], question_type: str, company_sector: Optional[str] = None, wav_bytes: bytes = b"") -> Dict[str, Any]:
+def score_response(response_text: str, question_text: str, relevant_keywords: List[str], question_type: str, company_sector: Optional[str] = None, user_id: Optional[str] = None, wav_bytes: bytes = b"") -> Dict[str, Any]:
     logger.info("⏳ Starting evaluation pipeline")
     tokens = [t.lemma_.lower().strip(string.punctuation) for t in nlp(response_text) if not t.is_stop and len(t.text) > 2]
     kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
