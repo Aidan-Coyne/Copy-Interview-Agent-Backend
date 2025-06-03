@@ -45,6 +45,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": "Request error", "detail": exc.detail},
+        headers={
+            "Access-Control-Allow-Origin": "https://ai-interview-agent-frontend-production.up.railway.app",
+            "Access-Control-Allow-Credentials": "true"
+        }
     )
 
 @app.exception_handler(Exception)
@@ -53,6 +57,10 @@ async def all_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"error": "Internal server error", "detail": str(exc)},
+        headers={
+            "Access-Control-Allow-Origin": "https://ai-interview-agent-frontend-production.up.railway.app",
+            "Access-Control-Allow-Credentials": "true"
+        }
     )
 
 logging.basicConfig(level=logging.INFO)
