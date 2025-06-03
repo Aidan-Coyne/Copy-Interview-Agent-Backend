@@ -30,6 +30,15 @@ from firebase_admin import credentials, storage, firestore
 print("🔥 FastAPI app starting…")
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://ai-interview-agent-frontend-production.up.railway.app"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+print("CORS Middleware configured.")
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logging.error(f"HTTP error: {exc.detail}")
@@ -45,15 +54,6 @@ async def all_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"error": "Internal server error", "detail": str(exc)},
     )
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://ai-interview-agent-frontend-production.up.railway.app"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-print("CORS Middleware configured.")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
