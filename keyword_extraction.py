@@ -9,6 +9,7 @@ import onnxruntime as rt
 from transformers import AutoTokenizer
 from keybert import KeyBERT
 from keybert.backend._base import BaseEmbedder
+import spacy
 
 import firebase_admin
 from firebase_admin import credentials, storage
@@ -85,75 +86,78 @@ class ONNXEmbedder(BaseEmbedder):
 onnx_embedder = ONNXEmbedder(SESSION, TOKENIZER)
 kw_model      = KeyBERT(model=onnx_embedder)
 
-# ─── Noise-word filtering ───────────────────────────────────────────────────────
+# ─── Additional NLP filtering (spaCy) ───────────────────────────────────────────
+nlp = spacy.load("en_core_web_sm")
+
+WHITELIST = {
+    "python", "java", "sql", "react", "node", "aws", "azure", "tensorflow", "docker",
+    "kubernetes", "git", "linux", "c#", "ml", "ai", "pandas", "data analysis"
+}
+
 STOPWORDS = {
-    "linkedin", "profile", "cv", "resume", "email", "phone", "contact",
+    "linkedin", "profile", "cv", "resume", "email", "phone", "contact", "name", "gmail",
     "january", "february", "march", "april", "may", "june", "july",
     "august", "september", "october", "november", "december"
 }
 
-def clean_keyword(keyword: str) -> bool:
-    if keyword.isdigit() or len(keyword) < 3:
+def is_clean_keyword(keyword: str) -> bool:
+    if not keyword or len(keyword) < 2:
         return False
-    if re.search(r"[\d]{2,}", keyword) or "+" in keyword or "@" in keyword:
+    if any(symbol in keyword for symbol in ["@", "+", "/", "\\"]):
         return False
     if keyword.lower() in STOPWORDS:
         return False
+    if re.search(r"\b\d{2,}\b", keyword):
+        return False
     return True
 
-# ─── Main extraction function ─────────────────────────────────────────────────
-def extract_keywords(
-    text: str,
-    top_n: int   = 10,
-    min_len: int = 3
-) -> list[str]:
-    try:
-        data = json.loads(text)
-        if (
-            isinstance(data, list) and data and
-            isinstance(data[0], dict) and "snippet" in data[0]
-        ):
-            text_input = " ".join(
-                item["snippet"]
-                for item in data
-                if isinstance(item.get("snippet"), str)
-            )
-        else:
-            text_input = text
-    except json.JSONDecodeError:
-        text_input = text
+def is_skill_like(keyword: str) -> bool:
+    if keyword.lower() in WHITELIST:
+        return True
+    doc = nlp(keyword)
+    return any(tok.pos_ in {"NOUN", "PROPN"} for tok in doc)
 
-    if not text_input or len(text_input) < 50:
-        logger.warning("Input text too short for reliable extraction.")
-        return []
-
-    start = time.time()
+# ─── Main extraction function ───────────────────────────────────────────────────
+def extract_keywords(text: str, top_n: int = 10) -> list[str]:
     try:
+        if text.strip().startswith("{") or text.strip().startswith("["):
+            try:
+                data = json.loads(text)
+                if isinstance(data, list) and data and isinstance(data[0], dict) and "snippet" in data[0]:
+                    text = " ".join(
+                        item["snippet"]
+                        for item in data
+                        if isinstance(item.get("snippet"), str)
+                    )
+            except json.JSONDecodeError:
+                pass
+
+        if not text or len(text) < 50:
+            logger.warning("⚠️ Input text too short for reliable extraction.")
+            return []
+
         raw = kw_model.extract_keywords(
-            text_input,
+            text,
             keyphrase_ngram_range=(1, 2),
             use_mmr=True,
-            nr_candidates=20,
-            top_n=top_n
+            nr_candidates=30,
+            top_n=top_n * 2
         )
-        logger.info(f"Raw KeyBERT candidates: {raw}")
 
         final_keywords = []
         for kw, _ in raw:
             kw = kw.strip().lower()
-            if not clean_keyword(kw):
+            if not is_clean_keyword(kw):
                 continue
-            if " " in kw:
-                # Only discard if both parts are bad
-                parts = kw.split()
-                if all(not clean_keyword(p) for p in parts):
-                    continue
+            if not is_skill_like(kw):
+                continue
             final_keywords.append(kw)
+            if len(final_keywords) >= top_n:
+                break
 
-        logger.info(f"Extracted & cleaned keywords: {final_keywords}")
-        logger.info(f"⏱ Keyword extraction took {time.time() - start:.2f}s")
-        return final_keywords[:top_n]
+        logger.info(f"✅ Final extracted keywords: {final_keywords}")
+        return final_keywords
 
     except Exception as e:
-        logger.error(f"Error during keyword extraction: {e}", exc_info=True)
+        logger.error(f"❌ Error during keyword extraction: {e}", exc_info=True)
         return []

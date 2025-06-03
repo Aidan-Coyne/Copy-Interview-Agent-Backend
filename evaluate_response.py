@@ -4,7 +4,6 @@ import wave
 import string
 import logging
 import subprocess
-import time
 import re
 import tempfile
 from io import BytesIO
@@ -19,30 +18,32 @@ from faster_whisper import WhisperModel
 from transformers import AutoTokenizer
 from openai import OpenAI
 
+from job_role_library import job_role_library
+from sector_library import sector_library
+from app_cache import get_cached_prompt, cache_prompt_to_firestore, get_question_hash
+from usage_logger import log_usage_to_supabase
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# ✅ Initialize OpenAI Client
+# Initialize OpenAI Client
 openai_client = OpenAI()
 
-# ✅ Load FasterWhisper tiny model
+# Load FasterWhisper tiny model
 whisper_model = WhisperModel("tiny", compute_type="int8")
-logger.info("✅ Loaded FasterWhisper model: tiny")
+logger.info("Loaded FasterWhisper model: tiny")
 
-# ✅ Load ONNX sentence encoder
+# Load ONNX sentence encoder
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 session = ort.InferenceSession(MODEL_PATH)
 
-# ✅ Load SpaCy
+# Load SpaCy
 nlp = spacy.load("en_core_web_sm")
 
 FILLER_WORDS = {
     "um", "uh", "like", "you know", "i mean", "basically", "sort of", "kind of", "er", "erm"
 }
-
-def deep_round(value: float, ndigits: int) -> float:
-    return round(value, ndigits)
 
 class TranscriptionError(Exception):
     pass
@@ -79,21 +80,41 @@ def count_filler_words(text: str) -> int:
 def extract_skills_from_response(text: str) -> List[str]:
     return list({t.text.lower() for t in nlp(text) if t.pos_ in {"NOUN", "VERB"}})
 
-def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_name: str, company_info: str) -> Tuple[List[str], str, Optional[str]]:
+def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_name: str, company_info: dict) -> Tuple[List[str], str, Optional[str]]:
     qtext = question_data.get("question_text", "").lower()
-    kws = set()
-    for rk in question_data.get("role_keywords", []):
-        kws.add(nlp(rk)[0].lemma_.lower())
-    for sk in question_data.get("sector_keywords", []):
-        kws.add(nlp(sk)[0].lemma_.lower())
-    qtype = "general"
+    keywords = set()
+
+    job_role_lower = job_role.lower()
+    for discipline, roles in job_role_library.items():
+        for role_title, kws in roles.items():
+            if isinstance(kws, list) and role_title.lower() == job_role_lower:
+                keywords.update(kws)
+                break
+
+    matched_sectors = set()
+    for item in company_info.get("search_results", []):
+        snippet = item.get("snippet", "").lower()
+        for sector, sector_keywords in sector_library.items():
+            for sk in sector_keywords:
+                if fuzz.partial_ratio(sk.lower(), snippet) > 75:
+                    matched_sectors.add(sector)
+    for sector in matched_sectors:
+        keywords.update(sector_library.get(sector, []))
+
+    lemmatized_keywords = {
+        nlp(k)[0].lemma_.lower() for k in keywords if isinstance(k, str) and len(k.strip()) > 2
+    }
+
     if "tell me about a time" in qtext or "describe a situation" in qtext:
         qtype = "behavioral"
     elif "how would you" in qtext:
         qtype = "situational"
     elif "skills" in qtext or "explain" in qtext:
         qtype = "technical"
-    return list(kws), qtype, None
+    else:
+        qtype = "general"
+
+    return list(lemmatized_keywords), qtype, ", ".join(matched_sectors) if matched_sectors else None
 
 def question_terms_score(q: str, r: str) -> float:
     q_tokens = {t.lemma_.lower() for t in nlp(q) if not t.is_stop and t.is_alpha and len(t.text) > 2}
@@ -141,20 +162,13 @@ def clarity_score(r: str, wav_bytes: bytes) -> float:
     filler_penalty = min(0.05 * count_filler_words(r), 0.25)
     return 100 * (1 - pause_penalty) * (1 - filler_penalty)
 
-from typing import List
-from app_cache import get_cached_prompt, cache_prompt_to_firestore, get_question_hash  # your cache module
-import logging
-from usage_logger import log_usage_to_supabase
-
-logger = logging.getLogger(__name__)
+def deep_round(value: float, ndigits: int) -> float:
+    return round(value, ndigits)
 
 def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecified", user_id: Optional[str] = None) -> List[str]:
     try:
-        # Try to get the prompt structure from Firestore
         cached_messages = get_cached_prompt(question)
-
         if not cached_messages:
-            # Fallback: construct prompt and cache it
             cached_messages = [
                 {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
                 {"role": "user", "content": f"""You are evaluating a candidate's interview answer.
@@ -171,9 +185,7 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
             """}
             ]
             cache_prompt_to_firestore(question, cached_messages, q_type)
-            logger.info(f"Prompt cached for question hash {get_question_hash(question)}")
 
-        # Replace placeholder with actual answer
         final_messages = [
             msg if msg["role"] == "system" else {
                 "role": "user",
@@ -182,7 +194,6 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
             for msg in cached_messages
         ]
 
-        # Send request to OpenAI
         result = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=final_messages,
@@ -190,7 +201,6 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
             max_tokens=80,
         )
 
-         # ✅ Log token usage to Supabase if user ID is provided
         if user_id:
             usage = result.usage
             total_tokens = usage.prompt_tokens + usage.completion_tokens
@@ -202,12 +212,11 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
         logger.error(f"OpenAI feedback failed: {e}")
         return ["(LLM Feedback error)"]
 
-
 def get_tier(score: float) -> str:
     return "needs_improvement" if score < 40 else "on_track" if score < 70 else "strong"
 
 def score_response(response_text: str, question_text: str, relevant_keywords: List[str], question_type: str, company_sector: Optional[str] = None, user_id: Optional[str] = None, wav_bytes: bytes = b"") -> Dict[str, Any]:
-    logger.info("⏳ Starting evaluation pipeline")
+    logger.info("Starting evaluation pipeline")
     tokens = [t.lemma_.lower().strip(string.punctuation) for t in nlp(response_text) if not t.is_stop and len(t.text) > 2]
     kws = [kw.lower().strip(string.punctuation) for kw in relevant_keywords]
     matched, missing = [], []
@@ -240,7 +249,7 @@ def score_response(response_text: str, question_text: str, relevant_keywords: Li
     for p in feedback_paragraphs:
         suggestions.append({"area": "Personalized Feedback", "feedback": p})
 
-    logger.info("✅ Evaluation pipeline completed")
+    logger.info("Evaluation pipeline completed")
     return {
         "score": score10,
         "clarity_tier": get_tier(clr),

@@ -19,6 +19,10 @@ import tempfile
 import requests
 from typing import Dict
 from keyword_extraction import onnx_embedder
+from job_role_matcher import match_job_role
+from job_role_library import job_role_library
+from difflib import get_close_matches
+
 
 import firebase_admin
 from firebase_admin import credentials, storage, firestore
@@ -258,6 +262,32 @@ async def upload_cv(
         "cv_embeddings": cv_embeddings,
         "cv_keywords": cv_keywords
     }
+
+        # 🔍 Match job role against the job_role_library
+    matched_role, matched_sector = match_job_role(job_role, job_role_library)
+
+    if not matched_role:
+        # Attempt to suggest alternatives if no match found
+        all_roles = [
+            role for sector in job_role_library.values()
+            for role in sector if not role.startswith("_")
+        ]
+        alternatives = get_close_matches(job_role.lower(), [r.lower() for r in all_roles], n=3, cutoff=0.4)
+
+        if alternatives:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unrecognized job role: '{job_role}'. Did you mean one of these? {alternatives}"
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unrecognized job role: '{job_role}'. Please try a simpler or more common title."
+            )
+
+    job_role = matched_role  # use canonical role
+
+
 
     company_info = search_company.search_company_info(company_name, job_role)
     company_info_json = json.loads(company_info)
