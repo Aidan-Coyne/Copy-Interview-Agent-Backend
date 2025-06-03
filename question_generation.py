@@ -103,11 +103,11 @@ def generate_questions(
 
     # 3) Question pools
     technical_questions = [
-        ("technical", f"Based on your CV, tell me about your experience with {relevant_skills[0]}.")
-        ("technical", f"Can you describe a project where you demonstrated {relevant_skills[1]} skills?")
+        ("technical", f"Based on your CV, tell me about your experience with {relevant_skills[0]}."),
+        ("technical", f"Can you describe a project where you demonstrated {relevant_skills[1]} skills?"),
         ("technical", f"Tell me about your most relevant experience in {relevant_experience}."),
-        ("technical", f"How do your skills align with {company_name}'s work in {company_sectors}.")
-        ("technical", f"Can you describe a technical challenge relevant to the {company_sectors} sector and how you overcame it?")
+        ("technical", f"How do your skills align with {company_name}'s work in {company_sectors}."),
+        ("technical", f"Can you describe a technical challenge relevant to the {company_sectors} sector and how you overcame it?"),
         ("technical", "Describe a situation where you had to overcome a challenging technical problem."),
         ("technical", "How do you stay updated with the latest advancements in your field?"),
         ("technical", "Explain a complex concept you recently learned and how it impacted your work."),
@@ -119,18 +119,18 @@ def generate_questions(
         ("technical", "Looking at your CV, which project best shows your ability to work independently?"),
         ("technical", "Which project on your CV best showcases your technical strengths?"),
         ("technical", "Can you walk me through a problem you solved that’s listed on your CV?"),
-        ("technical", f"In your most recent project, how did you apply {relevant_skills[0]} and what was the result?") 
+        ("technical", f"In your most recent project, how did you apply {relevant_skills[0]} and what was the result?"),
         ("technical", "Describe your process for testing new features."),
         ("technical", "What tools do you use for version control and why?"),
         ("technical", "How do you manage technical debt in projects?"),
         ("technical", "Have you ever optimized a slow system? How did you do it?"),
         ("technical", "How do you ensure your work is secure?"),
-        ("technical", f"In your most recent project, how did you apply {relevant_skills[0]} and what was the result?")
-        ("technical", f"What advice would you give someone starting to learn {relevant_skills[0]} based on your own experience?")
-        ("technical", f"What challenges did you face while applying {relevant_skills[0]} in a real-world setting?") 
+        ("technical", f"In your most recent project, how did you apply {relevant_skills[0]} and what was the result?"),
+        ("technical", f"What advice would you give someone starting to learn {relevant_skills[0]} based on your own experience?"),
+        ("technical", f"What challenges did you face while applying {relevant_skills[0]} in a real-world setting?"),
         ("technical", "Describe a time when you had to quickly learn a new technology."),
         ("technical", "How do you collaborate with non-technical team members?"),
-        ("technical", f"How did you build your expertise in {relevant_skills[0]}?")
+        ("technical", f"How did you build your expertise in {relevant_skills[0]}?"),
     ]
 
     behavioral_questions = [
