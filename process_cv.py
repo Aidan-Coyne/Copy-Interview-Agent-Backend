@@ -4,6 +4,7 @@ import logging
 from docx import Document
 from keyword_extraction import extract_keywords
 from google.cloud import storage
+from job_role_library import job_role_library
 import tempfile
 import os
 import time
@@ -57,8 +58,18 @@ def extract_text_from_file_path(file_path: str) -> str:
         logging.error("❌ Unsupported file type in Firebase download.")
         raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
+# 🎯 Extract relevant experience from keyword match against job role
+def extract_relevant_experience_from_keywords(cv_keywords: list[str], job_role: str) -> str:
+    job_role_lower = job_role.lower()
+    for sector, roles in job_role_library.items():
+        for role, keywords in roles.items():
+            if role.lower() == job_role_lower and isinstance(keywords, list):
+                matched = [kw for kw in cv_keywords if kw in keywords]
+                return ", ".join(matched[:2]) if matched else "your field"
+    return "your field"
+
 # ✅ Main CV processing entry point
-def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Bucket, top_n: int = 10) -> tuple:
+def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Bucket, job_role: str = None, top_n: int = 10) -> tuple:
     start = time.time()
 
     logging.info("⏱ Starting CV processing pipeline...")
@@ -75,6 +86,11 @@ def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Buc
     logging.info(f"✅ Extracted {len(keywords)} keywords")
     logging.info(f"⏱ Keyword extraction time: {time.time() - keyword_start:.2f}s")
 
+    relevant_experience = None
+    if job_role:
+        relevant_experience = extract_relevant_experience_from_keywords(keywords, job_role)
+        logging.info(f"🎯 Extracted relevant experience: {relevant_experience}")
+
     try:
         os.remove(local_path)
         logging.info(f"🧹 Temp file deleted: {local_path}")
@@ -84,4 +100,4 @@ def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Buc
     total_time = time.time() - start
     logging.info(f"🎯 Total CV processing time: {total_time:.2f}s")
 
-    return text, keywords
+    return text, keywords, relevant_experience

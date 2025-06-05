@@ -62,9 +62,10 @@ def generate_questions(
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
     # 1) Extract keywords and context
-    relevant_skills     = extract_relevant_skills_from_role(job_role)
-    relevant_experience = extract_relevant_experience(cv_text)
-    company_sectors     = extract_sectors(company_info)
+    relevant_skills = extract_relevant_skills_from_role(job_role)
+    relevant_experience = extract_relevant_experience_from_keywords(cv_keywords, job_role)
+    company_sectors = extract_sectors(company_info)
+
 
     if not relevant_skills:
         relevant_skills = random.sample(generic_skill_phrases, 2)
@@ -283,14 +284,14 @@ def extract_relevant_skills_from_role(job_role: str):
                     best_score = score
     return random.sample(best_match, min(2, len(best_match))) if best_match else []
 
-def extract_relevant_experience(cv_text: str):
-    doc = nlp(cv_text)
-    terms = [
-        token.text.lower()
-        for token in doc
-        if token.pos_ in ["NOUN", "VERB"] and len(token.text) > 2
-    ]
-    return ", ".join(terms[:2]) if terms else "your field"
+def extract_relevant_experience_from_keywords(cv_keywords: list[str], job_role: str) -> str:
+    job_role_lower = job_role.lower()
+    for sector, roles in job_role_library.items():
+        for role, keywords in roles.items():
+            if role.lower() == job_role_lower and isinstance(keywords, list):
+                matched = [kw for kw in cv_keywords if kw in keywords]
+                return ", ".join(matched[:2]) if matched else "your experience"
+    return "your experience"
 
 def extract_sectors(company_info: dict):
     matched_sectors = set()

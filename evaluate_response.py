@@ -19,26 +19,20 @@ from transformers import AutoTokenizer
 from openai import OpenAI
 
 from job_role_library import job_role_library
-from sector_library import sector_library
 from app_cache import get_cached_prompt, cache_prompt_to_firestore, get_question_hash
 from usage_logger import log_usage_to_supabase
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI Client
 openai_client = OpenAI()
-
-# Load FasterWhisper tiny model
 whisper_model = WhisperModel("tiny", compute_type="int8")
 logger.info("Loaded FasterWhisper model: tiny")
 
-# Load ONNX sentence encoder
 MODEL_PATH = "/app/models/paraphrase-MiniLM-L3-v2.onnx"
 tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 session = ort.InferenceSession(MODEL_PATH)
 
-# Load SpaCy
 nlp = spacy.load("en_core_web_sm")
 
 FILLER_WORDS = {
@@ -83,28 +77,17 @@ def extract_skills_from_response(text: str) -> List[str]:
 def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_name: str, company_info: dict) -> Tuple[List[str], str, Optional[str]]:
     qtext = question_data.get("question_text", "").lower()
     keywords = set()
+    matched_sector = None
 
     job_role_lower = job_role.lower()
     for discipline, roles in job_role_library.items():
         for role_title, kws in roles.items():
             if isinstance(kws, list) and role_title.lower() == job_role_lower:
                 keywords.update(kws)
+                matched_sector = discipline
                 break
 
-    matched_sectors = set()
-    for item in company_info.get("search_results", []):
-        snippet = item.get("snippet", "").lower()
-        for sector, sector_keywords in sector_library.items():
-            for sk in sector_keywords:
-                if fuzz.partial_ratio(sk.lower(), snippet) > 75:
-                    matched_sectors.add(sector)
-    for sector in matched_sectors:
-        keywords.update(sector_library.get(sector, []))
-
-    lemmatized_keywords = {
-        nlp(k)[0].lemma_.lower() for k in keywords if isinstance(k, str) and len(k.strip()) > 2
-    }
-
+    # Determine question type
     if "tell me about a time" in qtext or "describe a situation" in qtext:
         qtype = "behavioral"
     elif "how would you" in qtext:
@@ -114,7 +97,15 @@ def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_
     else:
         qtype = "general"
 
-    return list(lemmatized_keywords), qtype, ", ".join(matched_sectors) if matched_sectors else None
+    if not keywords:
+        logging.warning(f"⚠️ No keywords found for role: {job_role}")
+        return [], qtype, None
+
+    lemmatized_keywords = {
+        nlp(k)[0].lemma_.lower() for k in keywords if isinstance(k, str) and len(k.strip()) > 2
+    }
+
+    return list(lemmatized_keywords), qtype, matched_sector
 
 def question_terms_score(q: str, r: str) -> float:
     q_tokens = {t.lemma_.lower() for t in nlp(q) if not t.is_stop and t.is_alpha and len(t.text) > 2}
@@ -180,7 +171,7 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
             \"{{ANSWER_PLACEHOLDER}}\"
 
             Provide feedback in two clear paragraphs in max 80 tokens:
-            1. What they did well (quote strong phrases).
+            1. What they did well (quote from answer).
             2. What could be improved (clarify, expand, structure).
             """}
             ]
@@ -242,12 +233,12 @@ def score_response(response_text: str, question_text: str, relevant_keywords: Li
     if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce long pauses and avoid filler words."})
     if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": "Use key terms from the question to demonstrate focus."})
     if count_filler_words(response_text) > 0: suggestions.append({"area": "Clear Answer", "feedback": "Reduce filler words like 'uh', 'like', or 'you know'."})
-    if missing: suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
+    if missing and relevant_keywords: suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if len(response_text.split()) < 20: suggestions.append({"area": "Detail & Depth", "feedback": "Expand your answer with more detail or examples."})
 
     feedback_paragraphs = generate_openai_feedback(question_text, response_text)
     for p in feedback_paragraphs:
-        suggestions.append({"area": "Personalized Feedback", "feedback": p})
+        suggestions.append({"area": "Feedback", "feedback": p})
 
     logger.info("Evaluation pipeline completed")
     return {
