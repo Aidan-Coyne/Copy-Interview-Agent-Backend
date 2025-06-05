@@ -133,7 +133,7 @@ job_role_library = {
     },
     "Product & UX": {
         "_keywords": ["product management", "user experience", "agile", "user research", "roadmapping"],
-        "Product Manager": ["roadmap planning", "user stories", "backlog grooming", "stakeholder management"],
+        "Product Manager": ["roadmap planning", "user stories", "product manager", "stakeholder management", "commercial management"],
         "Scrum Master": ["sprint planning", "Kanban", "retrospectives", "agile ceremonies"],
         "UX/UI Designer": ["wireframing", "prototyping", "Figma", "Sketch", "user personas"],
         "UX Researcher": ["usability testing", "surveys", "interviews", "journey mapping"]
