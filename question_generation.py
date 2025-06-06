@@ -57,13 +57,13 @@ def generate_questions(
     firebase_bucket=None,
     session_id: str = None,
     cv_embeddings: any = None,
-    cv_keywords: list = None
+    cv_keywords: list = None,
+    relevant_experience: str = None
 ) -> list[dict]:
     logging.info(f"Generating {selected_question_type} questions for {company_name} - {job_role}")
 
     # 1) Extract keywords and context
     relevant_skills = extract_relevant_skills_from_role(job_role)
-    relevant_experience = extract_relevant_experience_from_keywords(cv_keywords, job_role)
     company_sectors = extract_sectors(company_info)
 
 

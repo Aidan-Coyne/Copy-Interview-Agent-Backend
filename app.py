@@ -260,7 +260,10 @@ async def upload_cv(
     cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
     logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
-    cv_text, cv_keywords = process_cv.process_cv_from_firebase(session_id, file.filename, bucket)
+    cv_text, cv_keywords, relevant_experience = process_cv.process_cv_from_firebase(
+    session_id, file.filename, bucket, job_role=job_role
+    )
+
     if not cv_text.strip():
         raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
 
