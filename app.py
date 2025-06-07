@@ -250,7 +250,7 @@ async def upload_cv(
 ):
     
             # 🔍 Match job role against the job_role_library
-    matched_role = match_job_role, (job_role, job_role_library)
+    matched_role = match_job_role(job_role, job_role_library)
 
     if not matched_role:
         # Attempt to suggest alternatives if no match found
