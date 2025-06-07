@@ -206,7 +206,9 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
         final_messages = [
             msg if msg["role"] == "system" else {
                 "role": "user",
-                "content": msg["content"].replace("{{ANSWER_PLACEHOLDER}}", answer)
+                "content": msg["content"]
+                .replace("{{ANSWER_PLACEHOLDER}}", answer)
+                .replace("{ANSWER_PLACEHOLDER}", answer)
             }
             for msg in cached_messages
         ]
