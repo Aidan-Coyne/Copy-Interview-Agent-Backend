@@ -22,6 +22,24 @@ from job_role_library import job_role_library
 from app_cache import get_cached_prompt, cache_prompt_to_firestore, get_question_hash
 from usage_logger import log_usage_to_supabase
 
+QUESTION_TYPE_GUIDANCE = {
+    "technical": (
+        "For technical questions, focus on structure, clarity, and specificity. "
+        "Explain your process, tools used, and outcomes. Mention challenges and how you resolved them."
+    ),
+    "behavioral": (
+        "For behavioral questions, use the STAR method (Situation, Task, Action, Result). "
+        "Share a specific past experience and highlight soft skills like communication and teamwork."
+    ),
+    "situational": (
+        "For situational questions, consider using the CARE method (Context, Action, Reasoning, Evaluation). "
+        "Describe how you'd approach the scenario, justify your decisions, and explain how you'd assess the outcome."
+    ),
+    "general": (
+        "For general questions, speak confidently and stay relevant. Reflect on your values, experience, and growth without going off-topic."
+    )
+}
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -88,14 +106,21 @@ def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_
                 break
 
     # Determine question type
-    if "tell me about a time" in qtext or "describe a situation" in qtext:
-        qtype = "behavioral"
-    elif "how would you" in qtext:
-        qtype = "situational"
-    elif "skills" in qtext or "explain" in qtext:
-        qtype = "technical"
+    stored_qtype = question_data.get("question_type", "").lower()
+    if stored_qtype in {"technical", "behavioral", "situational"}:
+     qtype = stored_qtype
     else:
-        qtype = "general"
+    
+    # fallback logic if not present or invalid
+        if "tell me about a time" in qtext or "describe a situation" in qtext:
+            qtype = "behavioral"
+        elif "how would you" in qtext:
+            qtype = "situational"
+        elif "skills" in qtext or "explain" in qtext:
+            qtype = "technical"
+        else:
+            qtype = "general"
+
 
     if not keywords:
         logging.warning(f"⚠️ No keywords found for role: {job_role}")
@@ -229,9 +254,16 @@ def score_response(response_text: str, question_text: str, relevant_keywords: Li
         {"area": "Relevance Breakdown", "feedback": f"Topic Fit: {sem:.1f}%  •  Clarity: {clr:.1f}%  •  Question Terms Used: {qterms:.1f}%"}
     ]
 
-    if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": "Consider aligning your answer more closely with the main topic."})
+    if question_type in QUESTION_TYPE_GUIDANCE:
+         suggestions.append({
+            "area": "Answering Strategy",
+            "feedback": QUESTION_TYPE_GUIDANCE[question_type]
+        })
+
+
+    if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": "Consider aligning your answer more closely with the main topic to improve relevance."})
     if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce long pauses and avoid filler words."})
-    if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": "Use key terms from the question to demonstrate focus."})
+    if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": "Use key terms from the question to demonstrate understanding."})
     if count_filler_words(response_text) > 0: suggestions.append({"area": "Clear Answer", "feedback": "Reduce filler words like 'uh', 'like', or 'you know'."})
     if missing and relevant_keywords: suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
     if len(response_text.split()) < 20: suggestions.append({"area": "Detail & Depth", "feedback": "Expand your answer with more detail or examples."})

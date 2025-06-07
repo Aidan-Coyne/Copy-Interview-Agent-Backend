@@ -25,16 +25,14 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 RUN echo "✅ Installed Python requirements"
 
-# 4. Preload models (no TinyLlama)
+# 4. Preload models (no SentenceTransformer or TinyLlama)
 RUN python - <<EOF
 import spacy, onnxruntime
-from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer
 from faster_whisper import WhisperModel
 
 print("📦 Downloading models...")
 spacy.cli.download("en_core_web_sm")
-SentenceTransformer("all-MiniLM-L6-v2")
 AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-MiniLM-L3-v2")
 WhisperModel("tiny", download_root="/app/models", compute_type="int8")
 _ = onnxruntime.get_device()

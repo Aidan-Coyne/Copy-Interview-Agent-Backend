@@ -288,12 +288,12 @@ async def upload_cv(
         if alternatives:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unrecognized job role: '{job_role}'. Did you mean one of these? {alternatives}"
+                detail=f"Unrecognised job role: '{job_role}'. Did you mean one of these? {alternatives}"
             )
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unrecognized job role: '{job_role}'. Please try a simpler or more common title."
+                detail=f"Unrecognised job role: '{job_role}'. Please try a simpler or more common title."
             )
 
     job_role = matched_role  # use canonical role

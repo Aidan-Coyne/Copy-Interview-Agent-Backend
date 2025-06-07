@@ -89,11 +89,6 @@ kw_model      = KeyBERT(model=onnx_embedder)
 # ─── Additional NLP filtering (spaCy) ───────────────────────────────────────────
 nlp = spacy.load("en_core_web_sm")
 
-WHITELIST = {
-    "python", "java", "sql", "react", "node", "aws", "azure", "tensorflow", "docker",
-    "kubernetes", "git", "linux", "c#", "ml", "ai", "pandas", "data analysis"
-}
-
 STOPWORDS = {
     "linkedin", "profile", "cv", "resume", "email", "phone", "contact", "name", "gmail",
     "january", "february", "march", "april", "may", "june", "july",
@@ -111,14 +106,26 @@ def is_clean_keyword(keyword: str) -> bool:
         return False
     return True
 
-def is_skill_like(keyword: str) -> bool:
-    if keyword.lower() in WHITELIST:
+def get_role_whitelist(job_role: str, job_sector: str, job_role_library: dict) -> set[str]:
+    sector_data = job_role_library.get(job_sector, {})
+    role_keywords = set(sector_data.get(job_role, []))
+    sector_keywords = set(sector_data.get("_keywords", []))
+    return {kw.lower() for kw in (role_keywords | sector_keywords)}
+
+def is_skill_like(keyword: str, whitelist: set[str]) -> bool:
+    if keyword.lower() in whitelist:
         return True
     doc = nlp(keyword)
     return any(tok.pos_ in {"NOUN", "PROPN"} for tok in doc)
 
 # ─── Main extraction function ───────────────────────────────────────────────────
-def extract_keywords(text: str, top_n: int = 10) -> list[str]:
+def extract_keywords(
+    text: str,
+    job_role: str,
+    job_sector: str,
+    job_role_library: dict,
+    top_n: int = 10
+) -> list[str]:
     try:
         if text.strip().startswith("{") or text.strip().startswith("["):
             try:
@@ -136,6 +143,8 @@ def extract_keywords(text: str, top_n: int = 10) -> list[str]:
             logger.warning("⚠️ Input text too short for reliable extraction.")
             return []
 
+        role_whitelist = get_role_whitelist(job_role, job_sector, job_role_library)
+
         raw = kw_model.extract_keywords(
             text,
             keyphrase_ngram_range=(1, 2),
@@ -149,7 +158,7 @@ def extract_keywords(text: str, top_n: int = 10) -> list[str]:
             kw = kw.strip().lower()
             if not is_clean_keyword(kw):
                 continue
-            if not is_skill_like(kw):
+            if not is_skill_like(kw, role_whitelist):
                 continue
             final_keywords.append(kw)
             if len(final_keywords) >= top_n:

@@ -108,7 +108,7 @@ def generate_questions(
         ("technical", f"Can you describe a project where you demonstrated {relevant_skills[1]} skills?"),
         ("technical", f"Tell me about your most relevant experience in {relevant_experience}."),
         ("technical", f"How do your skills align with {company_name}'s work in {company_sectors}."),
-        ("technical", f"Can you describe a technical challenge relevant to the {company_sectors} sector and how you overcame it?"),
+        ("technical", f"Can you describe a technical challenge relevant to {company_name} and how you overcame it?"),
         ("technical", "Describe a situation where you had to overcome a challenging technical problem."),
         ("technical", "How do you stay updated with the latest advancements in your field?"),
         ("technical", "Explain a complex concept you recently learned and how it impacted your work."),

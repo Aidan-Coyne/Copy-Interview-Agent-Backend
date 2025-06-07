@@ -150,18 +150,18 @@ if __name__ == "__main__":
 
         messages = [
             {"role": "system", "content": "You are an AI career coach providing structured interview feedback."},
-            {"role": "user", "content": f"""You are evaluating a candidate's interview answer.
+            {"role": "user", "content": """You are evaluating a candidate's interview answer.
 
 Question:
-\"{question}\"
+"{question}"
 
 Answer:
-\"{{ANSWER_PLACEHOLDER}}\"
+"{{ANSWER_PLACEHOLDER}}"
 
 Provide feedback in two clear paragraphs:
 1. What they did well (quote strong phrases).
 2. What could be improved (clarify, expand, structure).
-Keep it supportive, concise, and actionable."""}
+Keep it supportive, concise, and actionable.""".format(question=question)}
         ]
 
         cache_prompt_to_firestore(question, messages, q_type)
