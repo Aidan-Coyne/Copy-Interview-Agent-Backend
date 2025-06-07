@@ -158,10 +158,11 @@ Question:
 Answer:
 "{{ANSWER_PLACEHOLDER}}"
 
-Provide feedback in two clear paragraphs:
-1. What they did well (quote strong phrases).
-2. What could be improved (clarify, expand, structure).
-Keep it supportive, concise, and actionable.""".format(question=question)}
+Provide feedback in two clear paragraphs in max 80 tokens:
+            1. What they did well (quote from transcribed answer).
+
+            2. What could be improved (clarify, expand, structure).
+            """}.format(question=question)
         ]
 
         cache_prompt_to_firestore(question, messages, q_type)

@@ -190,13 +190,14 @@ def generate_openai_feedback(question: str, answer: str, q_type: str = "unspecif
                 {"role": "user", "content": f"""You are evaluating a candidate's interview answer.
 
             Question:
-            \"{question}\"
+            "{question}"
 
             Answer:
-            \"{{ANSWER_PLACEHOLDER}}\"
+            "{{ANSWER_PLACEHOLDER}}"
 
             Provide feedback in two clear paragraphs in max 80 tokens:
-            1. What they did well (quote from answer).
+            1. What they did well (quote from transcribed answer).
+
             2. What could be improved (clarify, expand, structure).
             """}
             ]
