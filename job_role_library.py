@@ -1,7 +1,7 @@
 job_role_library = {
     "Mechanical Engineering": {
         "_keywords": ["mechanical design", "CAD", "thermodynamics", "tolerance analysis", "FEA"],
-        "Design Engineer": ["CAD", "SolidWorks", "mechanical design", "tolerance analysis", "prototyping"],
+        "Design Engineer": ["CAD", "DFX", "mechanical design", "tolerance analysis", "prototyping"],
         "Stress Engineer": ["FEA", "load cases", "fatigue analysis", "ANSYS", "compliance checks"],
         "Thermal Engineer": ["heat transfer", "thermal simulation", "HVAC", "thermodynamics", "temperature control"]
     },
@@ -41,9 +41,8 @@ job_role_library = {
         "Industrial Engineer": ["time studies", "workforce planning", "process improvement", "OEE"]
     },
     "Systems Engineering": {
-        "_keywords": ["requirements engineering", "system architecture", "integration", "MBSE"],
+        "_keywords": ["requirements engineering", "system architecture", "integration", "design", "analysis", "product"],
         "Systems Engineer": ["requirements engineering", "system architecture", "model-based systems engineering", "interface definition", "V-model"],
-        "MBSE Engineer": ["SysML", "Cameo Systems Modeler", "system decomposition", "behavior diagrams"],
         "Requirements Engineer": ["DOORS", "traceability", "requirements validation", "Jama Connect"]
     },
     "Test Engineering": {
@@ -67,23 +66,23 @@ job_role_library = {
     "Integration Engineering": {
         "_keywords": ["system integration", "interfaces", "hardware-software merge"],
         "Integration Engineer": ["interface management", "subsystem testing", "end-to-end validation", "hardware/software integration", "compliance"],
-        "Mechanical Integration Engineer": ["assembly sequences", "mounting design", "CAD packaging", "clash detection"],
-        "Electrical Integration Engineer": ["wiring harness", "connector interface", "signal compatibility"]
+        "Mechanical Integration Engineer": ["assembly sequences", "mounting design", "CAD packaging", "clash detection", "product", "stakeholder management"],
+        
     },
     "Validation Engineering": {
         "_keywords": ["product validation", "test planning", "regulatory testing"],
         "Validation Engineer": ["validation plans", "functional testing", "acceptance criteria", "product verification"],
         "Product Validation Engineer": ["test matrix", "field testing", "durability testing", "regulatory validation"],
-        "System Validation Engineer": ["end-to-end testing", "test benches", "model validation", "failure simulation"]
+        "System Validation Engineer": ["end-to-end testing", "test benches", "model validation", "failure simulation", "commisioning"]
     },
     "Project Management": {
         "_keywords": ["timeline planning", "budgeting", "project lifecycle", "risk mitigation", "delivery tracking"],
         "Project Manager": ["timeline planning", "stakeholder management", "budget control", "project lifecycle", "risk mitigation"],
-        "Program Manager": ["program governance", "interdependencies", "strategic alignment", "cross-functional leadership"],
+        "Program Manager": ["program governance", "program delivery", "strategic alignment", "cross-functional leadership"],
         "Project Coordinator": ["timeline planning", "stakeholder management", "budget control", "project lifecycle", "risk mitigation"]
     },
     "Consultancy": {
-        "_keywords": ["stakeholder advice", "business strategy", "market analysis", "client delivery"],
+        "_keywords": ["stakeholder advice", "business strategy", "market analysis", "client delivery","risk management","KPI's"],
         "Strategy Consultant": ["market research", "business modelling", "competitive analysis", "SWOT", "stakeholder interviews"],
         "Engineering Consultant": ["client-facing", "technical reports", "specification writing", "multi-sector experience"],
         "Management Consultant": ["change management", "process improvement", "KPI analysis", "Lean Six Sigma"]
@@ -107,9 +106,12 @@ job_role_library = {
         "Treasury Analyst": ["liquidity management", "cash flow forecasting", "interest rate risk", "currency hedging", "money markets", "SWIFT payments"]
     },
     "Logistics": {
-        "_keywords": ["supply chain", "procurement", "demand forecasting", "ERP systems"],
+        "_keywords": ["supply chain", "procurement", "demand forecasting", "ERP systems", "MRP systems"],
         "Supply Chain Analyst": ["demand forecasting", "inventory management", "ERP systems", "logistics optimisation"],
-        "Procurement Manager": ["supplier negotiation", "contract management", "cost reduction", "sourcing strategy"]
+        "Procurement Manager": ["supplier negotiation", "contract management", "cost reduction", "sourcing strategy"],
+        "Warehouse Operative": ["inventory control", "pick and pack", "forklift operation", "stock accuracy"],
+        "Customs Compliance Officer": ["import/export regulations", "HS codes", "customs declarations", "trade compliance","incoterms"]
+
     },
     "DevOps & Cloud Infrastructure": {
         "_keywords": ["CI/CD", "Docker", "Kubernetes", "infrastructure as code", "Terraform", "monitoring", "AWS", "Azure", "GCP"],
@@ -118,12 +120,12 @@ job_role_library = {
         "Cloud Architect": ["AWS", "Azure", "GCP", "infrastructure as code", "VPC", "load balancing", "cost optimization"]
     },
     "Data & Analytics": {
-        "_keywords": ["data analysis", "ETL", "machine learning", "SQL", "modeling", "visualization"],
+        "_keywords": ["data analysis", "data cleaning", "machine learning", "SQL", "data mining", "dashboards"],
         "Data Scientist": ["Python", "pandas", "scikit-learn", "statistical modeling", "Jupyter"],
         "Machine Learning Engineer": ["TensorFlow", "PyTorch", "model deployment", "feature engineering", "MLOps"],
         "Data Analyst": ["SQL", "Tableau", "Power BI", "data visualization", "dashboarding"],
         "Business Intelligence Analyst": ["SQL", "Tableau", "Power BI", "data modeling", "ETL"],
-        "MLOps Engineer": ["Docker", "Kubernetes", "MLflow", "continuous training", "model monitoring"]
+        
     },
     "Security & Networking": {
         "_keywords": ["security", "networking", "vulnerability scanning", "IDS/IPS", "SIEM", "routing", "switching"],
@@ -133,17 +135,17 @@ job_role_library = {
     },
     "Product & UX": {
         "_keywords": ["product management", "user experience", "agile", "user research", "roadmapping"],
-        "Product Manager": ["roadmap planning", "user stories", "product manager", "stakeholder management", "commercial management"],
-        "Scrum Master": ["sprint planning", "Kanban", "retrospectives", "agile ceremonies"],
+        "Product Manager": ["roadmap planning", "market analysis", "product manager", "stakeholder management", "commercial management"],
+        "Scrum Master": ["sprint planning", "Kanban", "workflows", "stand-ups"],
         "UX/UI Designer": ["wireframing", "prototyping", "Figma", "Sketch", "user personas"],
-        "UX Researcher": ["usability testing", "surveys", "interviews", "journey mapping"]
+        "UX Researcher": ["usability testing", "surveys", "user feedback", "design roadmap"]
     },
     "Emerging Technologies": {
         "_keywords": ["blockchain", "IoT", "quantum computing", "renewable energy"],
         "Blockchain Developer": ["Solidity", "smart contracts", "Ethereum", "Hyperledger", "Web3"],
         "IoT Engineer": ["MQTT", "embedded Linux", "sensor integration", "edge computing"],
         "Quantum Computing Researcher": ["Qiskit", "quantum algorithms", "qubits", "error correction"],
-        "Sustainability Engineer": ["solar PV", "lifecycle analysis", "energy modeling", "LEED", "carbon footprint"]
+        "Sustainability Engineer": ["solar PV", "lifecycle analysis", "energy modeling", "energy systems", "carbon footprint"]
     },
     "Operations & Support": {
         "_keywords": ["IT support", "helpdesk", "technical writing", "customer success", "troubleshooting"],
@@ -181,8 +183,8 @@ job_role_library = {
         "_keywords": ["reception", "customer service", "telephone etiquette", "scheduling", "visitor management"],
         "Receptionist": ["greeting visitors", "call routing", "appointment scheduling", "mail handling", "lobby upkeep"],
         "Front Desk Coordinator": ["check-in/check-out", "meeting room booking", "vendor coordination", "visitor badges", "information desk"],
-        "Administrative Assistant": ["calendar management", "travel arrangements", "data entry", "office supplies", "expense reports"],
-        "Guest Services Officer": ["customer enquiries", "complaint resolution", "concierge services", "facility tours", "event support"]
+        "Guest Services Officer": ["customer enquiries", "complaint resolution", "concierge services", "facility tours", "event support"],
+        "Administrator": ["meeting minutes", "data entry", "expense reports", "email writing", "communication" ]
     },
     "Legal & Compliance": {
         "_keywords": ["legal research", "case management", "contract drafting", "compliance", "litigation", "regulations"],
@@ -216,7 +218,6 @@ job_role_library = {
         "Laboratory Technician": ["specimen collection", "lab testing", "microscopy", "quality control", "data reporting"],
         "Medical Receptionist": ["appointment scheduling", "patient registration", "insurance verification", "phone triage", "EHR management"],
         "Healthcare Administrator": ["operations management", "policy development", "staff scheduling", "budgeting", "regulatory compliance"],
-        "Medical Billing Specialist": ["ICD-10/CPT coding", "claims processing", "insurance reimbursement", "billing software", "payment posting"],
         "Clinical Research Coordinator": ["protocol management", "patient recruitment", "data collection", "IRB coordination", "regulatory reporting"],
         "General Surgeon": ["pre/post-operative care", "laparoscopic procedures", "patient consent", "sterile technique", "wound management"],
         "Neurosurgeon": ["brain surgery", "spinal procedures", "microsurgery", "neuroimaging interpretation", "ICU management"],
@@ -238,7 +239,7 @@ job_role_library = {
 
     "Hospitality & Tourism": {
     "_keywords": ["hotel management", "guest services", "event planning", "food & beverage", "housekeeping", "hospitality", "service", "cleaning"],
-    "Hotel Manager": ["front desk operations", "staff management", "revenue optimization", "customer satisfaction", "quality assurance"],
+    "Hotel Manager": ["front desk operations", "staff management", "revenue optimisation", "customer satisfaction", "quality assurance"],
     "Front Office Manager": ["reservations", "check-in/check-out", "concierge services", "cash handling", "shift scheduling"],
     "Housekeeping Supervisor": ["cleaning standards", "inventory control", "staff training", "room inspections", "quality checks"],
     "Food & Beverage Manager": ["menu planning", "cost control", "vendor relations", "service standards", "inventory management"],
