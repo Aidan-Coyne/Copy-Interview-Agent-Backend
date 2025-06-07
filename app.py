@@ -285,7 +285,7 @@ async def upload_cv(
     logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
 
     cv_text, cv_keywords, relevant_experience = process_cv.process_cv_from_firebase(
-    session_id, file.filename, bucket, job_role=job_role, job_sector=matched_sector
+    session_id, file.filename, bucket, job_role=job_role,
     )
 
     if not cv_text.strip():
