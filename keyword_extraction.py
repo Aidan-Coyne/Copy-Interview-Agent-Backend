@@ -106,11 +106,9 @@ def is_clean_keyword(keyword: str) -> bool:
         return False
     return True
 
-def get_role_whitelist(job_role: str, job_sector: str, job_role_library: dict) -> set[str]:
-    sector_data = job_role_library.get(job_sector, {})
-    role_keywords = set(sector_data.get(job_role, []))
-    sector_keywords = set(sector_data.get("_keywords", []))
-    return {kw.lower() for kw in (role_keywords | sector_keywords)}
+def get_role_whitelist(job_role: str, job_role_library: dict) -> set[str]:
+    keywords = job_role_library.get(job_role.lower(), [])
+    return {kw.lower() for kw in keywords}
 
 def is_skill_like(keyword: str, whitelist: set[str]) -> bool:
     if keyword.lower() in whitelist:
@@ -122,7 +120,6 @@ def is_skill_like(keyword: str, whitelist: set[str]) -> bool:
 def extract_keywords(
     text: str,
     job_role: str,
-    job_sector: str,
     job_role_library: dict,
     top_n: int = 10
 ) -> list[str]:
@@ -143,7 +140,7 @@ def extract_keywords(
             logger.warning("⚠️ Input text too short for reliable extraction.")
             return []
 
-        role_whitelist = get_role_whitelist(job_role, job_sector, job_role_library)
+        role_whitelist = get_role_whitelist(job_role, job_role_library)
 
         raw = kw_model.extract_keywords(
             text,

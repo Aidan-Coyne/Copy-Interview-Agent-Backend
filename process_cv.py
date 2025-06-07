@@ -82,7 +82,7 @@ def process_cv_from_firebase(session_id: str, filename: str, bucket: storage.Buc
 
     keyword_start = time.time()
     logging.info("🔑 Extracting keywords from CV text...")
-    keywords = extract_keywords(text, top_n=top_n)
+    keywords = extract_keywords(text, job_role, job_role_library, top_n=top_n)
     logging.info(f"✅ Extracted {len(keywords)} keywords")
     logging.info(f"⏱ Keyword extraction time: {time.time() - keyword_start:.2f}s")
 

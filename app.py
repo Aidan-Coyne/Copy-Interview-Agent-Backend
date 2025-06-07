@@ -250,13 +250,13 @@ async def upload_cv(
 ):
     
             # 🔍 Match job role against the job_role_library
-    matched_role, matched_sector = match_job_role(job_role, job_role_library)
+    matched_role, = match_job_role(job_role, job_role_library)
 
     if not matched_role:
         # Attempt to suggest alternatives if no match found
         all_roles = [
-            role for sector in job_role_library.values()
-            for role in sector if not role.startswith("_")
+            role for role in job_role_library.values()
+            if not role.startswith("_")
         ]
         alternatives = get_close_matches(job_role.lower(), [r.lower() for r in all_roles], n=3, cutoff=0.4)
 
