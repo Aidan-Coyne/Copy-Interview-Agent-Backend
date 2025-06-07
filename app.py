@@ -248,33 +248,8 @@ async def upload_cv(
     job_role: str = Form(...),
     question_type: str = Form("mixed")
 ):
-    user_id = get_supabase_user_id(request)
-    session_id = f"{company_name}_{job_role}_{file.filename}"
-    logger.info(f"Received upload_cv request for session: {session_id}")
-
-    if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
-        raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
-
-    cv_path = f"sessions/{session_id}/cv/{file.filename}"
-    file_bytes = await file.read()
-    cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
-    logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
-
-    cv_text, cv_keywords, relevant_experience = process_cv.process_cv_from_firebase(
-    session_id, file.filename, bucket, job_role=job_role
-    )
-
-    if not cv_text.strip():
-        raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
-
-    cv_embeddings = onnx_embedder.embed([cv_text])
-    session_data[session_id] = {
-        "cv_text": cv_text,
-        "cv_embeddings": cv_embeddings,
-        "cv_keywords": cv_keywords
-    }
-
-        # 🔍 Match job role against the job_role_library
+    
+            # 🔍 Match job role against the job_role_library
     matched_role, matched_sector = match_job_role(job_role, job_role_library)
 
     if not matched_role:
@@ -297,8 +272,31 @@ async def upload_cv(
             )
 
     job_role = matched_role  # use canonical role
+    user_id = get_supabase_user_id(request)
+    session_id = f"{company_name}_{job_role}_{file.filename}"
+    logger.info(f"Received upload_cv request for session: {session_id}")
 
+    if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
+        raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
+    cv_path = f"sessions/{session_id}/cv/{file.filename}"
+    file_bytes = await file.read()
+    cv_public_url = upload_to_firebase(file_bytes, bucket, cv_path, file.content_type)
+    logger.info(f"✅ CV uploaded to Firebase: {cv_public_url}")
+
+    cv_text, cv_keywords, relevant_experience = process_cv.process_cv_from_firebase(
+    session_id, file.filename, bucket, job_role=job_role, job_sector=matched_sector
+    )
+
+    if not cv_text.strip():
+        raise HTTPException(status_code=400, detail="CV text extraction failed or CV is empty.")
+
+    cv_embeddings = onnx_embedder.embed([cv_text])
+    session_data[session_id] = {
+        "cv_text": cv_text,
+        "cv_embeddings": cv_embeddings,
+        "cv_keywords": cv_keywords
+    }
 
     company_info = search_company.search_company_info(company_name, job_role)
     company_info_json = json.loads(company_info)
