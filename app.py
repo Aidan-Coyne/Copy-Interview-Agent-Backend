@@ -276,6 +276,12 @@ async def upload_cv(
     session_id = f"{company_name}_{job_role}_{file.filename}"
     logger.info(f"Received upload_cv request for session: {session_id}")
 
+    logger.info(f"🚀 Session created: {session_id}")
+    logger.info(f"Questions generated:")
+    for i, q in enumerate(questions_data):
+        logger.info(f"  Q{i+1}: {q['question_text']}")
+
+
     if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
         raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
@@ -361,9 +367,9 @@ async def evaluate_audio_response(
 
     if not question_data:
         logger.warning(f"⚠️ No exact match for provided question_text. Falling back to index.")
-    if question_index >= len(questions):
-        raise HTTPException(status_code=400, detail="Invalid question index.")
-    question_data = questions[question_index]
+        if question_index >= len(questions):
+            raise HTTPException(status_code=400, detail="Invalid question index.")
+        question_data = questions[question_index]
 
     read_start = time.time()
     audio_data = await audio_file.read()
@@ -386,6 +392,13 @@ async def evaluate_audio_response(
         session["company_name"],
         session["company_info"]
     )
+
+    logger.warning(f"🧠 DEBUG SESSION: session_id={session_id}")
+    logger.warning(f"👉 Incoming question_text: {question_text}")
+    logger.warning(f"🧾 Available questions:")
+    for i, q in enumerate(questions):
+        logger.warning(f"  Q{i+1}: {q['question_text']}")
+    
     result = evaluate_response.score_response(
         response_text,
         question_data["question_text"],
