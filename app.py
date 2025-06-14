@@ -277,11 +277,7 @@ async def upload_cv(
     logger.info(f"Received upload_cv request for session: {session_id}")
 
     logger.info(f"🚀 Session created: {session_id}")
-    logger.info(f"Questions generated:")
-    for i, q in enumerate(questions_data):
-        logger.info(f"  Q{i+1}: {q['question_text']}")
-
-
+    
     if not file.filename.lower().endswith((".pdf", ".doc", ".docx")):
         raise HTTPException(status_code=400, detail="Unsupported file type. Only PDF and Word documents are allowed.")
 
@@ -321,6 +317,10 @@ async def upload_cv(
         )
     
     # ✅ Log question generation after receiving data
+    logger.info(f"Questions generated:")
+    for i, q in enumerate(questions_data):
+        logger.info(f"  Q{i+1}: {q['question_text']}")
+        
     log_usage_to_supabase(user_id, tokens_used=len(json.dumps(questions_data).split()), request_type="generate_questions")
 
     session_data[session_id].update({
