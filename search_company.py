@@ -2,6 +2,8 @@ import os
 import requests
 import json
 import logging
+from job_role_library import job_role_library
+from keyword_extraction import extract_keywords  # ✅ Moved to top for clarity
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,10 +47,13 @@ def search_company_info(company_name: str, job_role: str):
 
         # Combine all snippet text for advanced keyword extraction.
         combined_text = " ".join([result["snippet"] for result in web_results if result.get("snippet")])
-        
-        # Import and use the keyword_extraction module (ensure it's installed and in your path)
-        from keyword_extraction import extract_keywords
-        extracted_keywords = extract_keywords(combined_text, top_n=10) if combined_text else []
+
+        extracted_keywords = extract_keywords(
+            combined_text,
+            job_role,
+            job_role_library,
+            top_n=10
+        ) if combined_text else []
 
         result_data = {
             "search_results": web_results,
