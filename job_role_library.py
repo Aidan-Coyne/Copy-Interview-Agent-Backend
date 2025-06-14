@@ -1,18 +1,18 @@
 job_role_library = {
     "Mechanical Engineering": {
-        "_keywords": ["mechanical design", "CAD", "thermodynamics", "tolerance analysis", "FEA"],
+        "Mechanical Engineer": ["mechanical design", "CAD", "thermodynamics", "tolerance analysis", "FEA"],
         "Design Engineer": ["CAD", "DFX", "mechanical design", "tolerance analysis", "prototyping"],
         "Stress Engineer": ["FEA", "load cases", "fatigue analysis", "ANSYS", "compliance checks"],
         "Thermal Engineer": ["heat transfer", "thermal simulation", "HVAC", "thermodynamics", "temperature control"]
     },
     "Electrical Engineering": {
-        "_keywords": ["circuit design", "power distribution", "electrical testing", "signal integrity", "PLC"],
+        "Electrical Engineer": ["circuit design", "power distribution", "electrical testing", "hardware", "software"],
         "Power Systems Engineer": ["high voltage", "grid stability", "load flow analysis", "switchgear", "substations"],
         "Control Systems Engineer": ["PLC", "PID tuning", "SCADA", "automation logic", "control loops"],
         "Circuit Design Engineer": ["PCB layout", "signal integrity", "analog/digital circuits", "SPICE", "schematic design"]
     },
     "Civil & Structural Engineering": {
-        "_keywords": ["structural design", "geotechnical analysis", "transport systems", "water systems", "site safety"],
+        "Civil Engineer": ["structural design", "geotechnical analysis", "transport systems", "water systems", "site safety"],
         "Structural Engineer": ["reinforced concrete", "steel structures", "Eurocodes", "load bearing", "structural integrity"],
         "Geotechnical Engineer": ["soil mechanics", "piling", "retaining walls", "foundation design", "site investigation"],
         "Transportation Engineer": ["highway design", "traffic modeling", "AutoCAD Civil 3D", "junction layout", "road safety audit"],
@@ -30,7 +30,7 @@ job_role_library = {
         "Supplier Quality Engineer": ["PPAP", "APQP", "supplier audits", "control plans", "corrective actions"]
     },
     "Chemical Engineering": {
-        "_keywords": ["chemical processes", "reactor design", "HAZOP", "safety", "process optimisation"],
+        "Chemical Engineer": ["chemical processes", "reactor design", "HAZOP", "safety", "process optimisation"],
         "Process Engineer": ["P&IDs", "mass balance", "reactor design", "chemical process safety", "process optimisation"],
         "Chemical Safety Engineer": ["HAZOP", "process hazard analysis", "toxicology", "emergency planning"]
     },
@@ -41,13 +41,12 @@ job_role_library = {
     },
     "Systems Engineering": {
         "_keywords": ["requirements engineering", "system architecture", "integration", "design", "analysis", "product"],
-        "Systems Engineer": ["requirements engineering", "system architecture", "model-based systems engineering", "interface definition", "V-model"],
+        "Systems Engineer": ["requirements", "system architecture", "integration", "design", "analysis"],
         "Requirements Engineer": ["DOORS", "traceability", "requirements validation", "Jama Connect"]
     },
     "Test Engineering": {
         "_keywords": ["test procedures", "verification", "validation", "measurement systems"],
-        "Test Engineer": ["test planning", "test execution", "test reports", "lab equipment", "test procedure writing"],
-        "Hardware Test Engineer": ["oscilloscope", "multimeter", "signal verification", "electrical validation"],
+        "Test Engineer": ["test planning", "test execution", "test reports", "lab equipment", "bench testing"],
         "Software Test Engineer": ["unit testing", "integration testing", "automation frameworks", "pytest", "Jenkins"]
     },
     "Simulation Engineering": {
