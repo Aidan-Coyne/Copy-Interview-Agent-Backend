@@ -8,6 +8,7 @@ import re
 import tempfile
 from io import BytesIO
 from typing import List, Dict, Tuple, Any, Optional
+import random
 
 import spacy
 from fuzzywuzzy import fuzz
@@ -60,6 +61,95 @@ FILLER_WORDS = {
 class TranscriptionError(Exception):
     pass
 
+def feedback_tier(score: float) -> str:
+    if score < 30:
+        return "low"
+    elif score <= 70:
+        return "medium"
+    return "high"
+
+TOPIC_FIT_FEEDBACK = {
+    "low": [
+        "Your answer strayed far from the question topic. Try to focus more directly.",
+        "The core subject was missed. Try to align your response better with the question."
+    ],
+    "medium": [
+        "Try to stay more focused on the key points of the question.",
+        "Your answer covered the topic partially—aim for better alignment."
+    ],
+    "high": [
+        "Your answer was on topic. For even better results, refine your focus.",
+        "Good topic alignment—just a small improvement needed to sharpen it."
+    ]
+}
+
+CLARITY_FEEDBACK = {
+    "low": [
+        "Frequent pauses and filler words made the answer unclear. Practice smoother delivery.",
+        "The message was hard to follow due to delivery issues. Work on pacing and fluency."
+    ],
+    "medium": [
+        "Clarity could improve by reducing filler words and hesitations.",
+        "You’re getting there—fewer pauses will help your delivery."
+    ],
+    "high": [
+        "Clarity was good overall. Minor polishing would make it excellent.",
+        "Strong clarity—smooth delivery overall with minor room for improvement."
+    ]
+}
+
+QTERMS_FEEDBACK = {
+    "low": [
+        "You missed most key terms from the question—try to use them to show understanding.",
+        "Reusing terms from the question can show alignment and comprehension."
+    ],
+    "medium": [
+        "Some important terms were used, but you can improve coverage.",
+        "Consider integrating more question keywords to boost clarity."
+    ],
+    "high": [
+        "You used question terms effectively—just a little more consistency would help.",
+        "Strong use of question language. Minor tweaks could enhance impact."
+    ]
+}
+
+FILLER_FEEDBACK = {
+    "low": [
+        "There were many filler words. Aim to reduce 'uh', 'like', and 'you know'.",
+        "Try to eliminate fillers to help your message come across clearly."
+    ],
+    "medium": [
+        "Watch for filler words—they slightly disrupted flow.",
+        "Try reducing fillers to make your answer more concise."
+    ],
+    "high": [
+        "Only a few filler words—keep up the smooth delivery!",
+        "Your response was mostly free of fillers. Great job!"
+    ]
+}
+
+KEYWORD_FEEDBACK = {
+    "low": [
+        "Important keywords were missing: {keywords}. Try including them next time.",
+        "You're missing some key ideas: {keywords}—try to include them."
+    ],
+    "medium": [
+        "Some relevant terms were left out: {keywords}. Consider incorporating them.",
+        "You used a few relevant keywords, but missed: {keywords}."
+    ],
+    "high": [
+        "Most keywords were covered. Just a few missed: {keywords}.",
+        "Great job using keywords—only a couple were missed: {keywords}."
+    ]
+}
+
+DETAIL_FEEDBACK = {
+    "low": [
+        "Expand your answer with more detail or examples.",
+        "Consider providing specific examples or context to enrich your response."
+    ]
+}
+
 def convert_to_wav(audio_data: bytes) -> bytes:
     proc = subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
@@ -105,13 +195,10 @@ def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_
                 matched_sector = discipline
                 break
 
-    # Determine question type
     stored_qtype = question_data.get("question_type", "").lower()
     if stored_qtype in {"technical", "behavioral", "situational"}:
-     qtype = stored_qtype
+        qtype = stored_qtype
     else:
-    
-    # fallback logic if not present or invalid
         if "tell me about a time" in qtext or "describe a situation" in qtext:
             qtype = "behavioral"
         elif "how would you" in qtext:
@@ -120,7 +207,6 @@ def get_relevant_keywords(question_data: Dict[str, Any], job_role: str, company_
             qtype = "technical"
         else:
             qtype = "general"
-
 
     if not keywords:
         logging.warning(f"⚠️ No keywords found for role: {job_role}")
@@ -258,18 +344,36 @@ def score_response(response_text: str, question_text: str, relevant_keywords: Li
     ]
 
     if question_type in QUESTION_TYPE_GUIDANCE:
-         suggestions.append({
+        suggestions.append({
             "area": "Answering Strategy",
             "feedback": QUESTION_TYPE_GUIDANCE[question_type]
         })
 
+    # Tiered feedback
+    if sem < 100:
+        tier = feedback_tier(sem)
+        suggestions.append({"area": "Topic Fit", "feedback": random.choice(TOPIC_FIT_FEEDBACK[tier])})
 
-    if sem < 70: suggestions.append({"area": "Topic Fit", "feedback": "Consider aligning your answer more closely with the main topic to improve relevance."})
-    if clr < 70: suggestions.append({"area": "Clear Answer", "feedback": "Try to reduce long pauses and avoid filler words."})
-    if qterms < 70: suggestions.append({"area": "Question Terms Used", "feedback": "Use key terms from the question to demonstrate understanding."})
-    if count_filler_words(response_text) > 0: suggestions.append({"area": "Clear Answer", "feedback": "Reduce filler words like 'uh', 'like', or 'you know'."})
-    if missing and relevant_keywords: suggestions.append({"area": "Keyword Usage", "feedback": f"Consider adding missing keywords: {', '.join(missing)}."})
-    if len(response_text.split()) < 20: suggestions.append({"area": "Detail & Depth", "feedback": "Expand your answer with more detail or examples."})
+    if clr < 100:
+        tier = feedback_tier(clr)
+        suggestions.append({"area": "Clear Answer", "feedback": random.choice(CLARITY_FEEDBACK[tier])})
+
+    if qterms < 100:
+        tier = feedback_tier(qterms)
+        suggestions.append({"area": "Question Terms Used", "feedback": random.choice(QTERMS_FEEDBACK[tier])})
+
+    filler_count = count_filler_words(response_text)
+    if filler_count > 0:
+        tier = feedback_tier(100 - min(filler_count * 5, 100))
+        suggestions.append({"area": "Clear Answer", "feedback": random.choice(FILLER_FEEDBACK[tier])})
+
+    if missing and relevant_keywords:
+        tier = feedback_tier(keyword_score)
+        formatted = random.choice(KEYWORD_FEEDBACK[tier]).format(keywords=", ".join(missing))
+        suggestions.append({"area": "Keyword Usage", "feedback": formatted})
+
+    if len(response_text.split()) < 20:
+        suggestions.append({"area": "Detail & Depth", "feedback": random.choice(DETAIL_FEEDBACK["low"])})
 
     feedback_paragraphs = generate_openai_feedback(question_text, response_text)
     for p in feedback_paragraphs:
@@ -286,3 +390,4 @@ def score_response(response_text: str, question_text: str, relevant_keywords: Li
         "improvement_suggestions": suggestions,
         "transcribed_text": response_text
     }
+

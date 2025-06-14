@@ -20,9 +20,8 @@ job_role_library = {
         "Construction Site Engineer": ["scheduling", "contractor management", "site safety", "method statements", "construction monitoring"]
     },
     "Software Engineering": {
-        "_keywords": ["software development", "debugging", "deployment", "algorithms", "programming languages"],
+        "Software Engineer": ["software development", "debugging", "deployment", "algorithms", "programming languages"],
         "Full Stack Developer": ["React", "Node.js", "API integration", "MongoDB", "deployment pipelines"],
-        "Embedded Software Engineer": ["C/C++", "RTOS", "microcontrollers", "firmware development", "UART/I2C/SPI"],
         "Data Engineer": ["ETL", "SQL", "Spark", "data pipelines", "cloud storage"]
     },
     "Quality Engineering": {
@@ -84,7 +83,7 @@ job_role_library = {
     "Consultancy": {
         "_keywords": ["stakeholder advice", "business strategy", "market analysis", "client delivery","risk management","KPI's"],
         "Strategy Consultant": ["market research", "business modelling", "competitive analysis", "SWOT", "stakeholder interviews"],
-        "Engineering Consultant": ["client-facing", "technical reports", "specification writing", "multi-sector experience"],
+        "Engineering Consultant": ["client-facing", "technical reports", "specification writing", "systems engineering"],
         "Management Consultant": ["change management", "process improvement", "KPI analysis", "Lean Six Sigma"]
     },
     "Finance": {
