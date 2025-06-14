@@ -339,7 +339,8 @@ async def evaluate_audio_response(
     request: Request,
     audio_file: UploadFile = File(...),
     question_index: int = Form(...),
-    session_id: str = Form(...)
+    session_id: str = Form(...),
+    question_text: str = Form(...)
 ):
     user_id = get_supabase_user_id(request)
 
@@ -356,7 +357,14 @@ async def evaluate_audio_response(
     if question_index >= len(questions):
         raise HTTPException(status_code=400, detail="Invalid question index.")
 
+    question_data = next((q for q in questions if q["question_text"] == question_text), None)
+
+    if not question_data:
+        logger.warning(f"⚠️ No exact match for provided question_text. Falling back to index.")
+    if question_index >= len(questions):
+        raise HTTPException(status_code=400, detail="Invalid question index.")
     question_data = questions[question_index]
+
     read_start = time.time()
     audio_data = await audio_file.read()
     logger.info(f"⏱ read multipart in {(time.time() - read_start):.2f}s")
