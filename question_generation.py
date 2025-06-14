@@ -12,6 +12,8 @@ from keyword_extraction import extract_keywords  # ONNX-backed extractor
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+random.seed(int.from_bytes(os.urandom(8), "big"))
+
 logging.basicConfig(level=logging.INFO)
 nlp = spacy.load("en_core_web_sm")
 
