@@ -254,22 +254,33 @@ async def upload_cv(
 
     if not matched_role:
         # Attempt to suggest alternatives if no match found
+        # Correctly flatten roles
         all_roles = [
-            role for role in job_role_library.values()
+            role
+            for category in job_role_library.values()
+            for role in category
             if not role.startswith("_")
         ]
         alternatives = get_close_matches(job_role.lower(), [r.lower() for r in all_roles], n=3, cutoff=0.4)
+        alternatives_display = [r for r in all_roles if r.lower() in alternatives]
 
-        if alternatives:
+        if alternatives_display:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unrecognised job role: '{job_role}'. Did you mean one of these? {alternatives}"
+                detail={
+                    "message": f"Unrecognised job role: '{job_role}'.",
+                    "suggestions": alternatives_display
+                }
             )
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unrecognised job role: '{job_role}'. Please try a simpler or more common title."
+                detail={
+                    "message": f"Unrecognised job role: '{job_role}'. Please try a simpler or more common title.",
+                    "suggestions": []
+                }
             )
+
 
     job_role = matched_role  # use canonical role
     user_id = get_supabase_user_id(request)
