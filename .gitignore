@@ -15,3 +15,5 @@ user_responses/
 .vscode/
 .DS_Store
 Thumbs.db
+.env
+ai-interview-agent-*-firebase-adminsdk-*.json
